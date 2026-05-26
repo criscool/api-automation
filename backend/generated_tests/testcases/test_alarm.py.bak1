@@ -1,0 +1,118 @@
+"""告警接口测试"""
+import pytest
+pytestmark = [pytest.mark.alarm, pytest.mark.api]
+
+@pytest.fixture
+def created_alarm_rule(api_client):
+    """创建告警规则，返回规则ID及响应数据供后续步骤使用"""
+    payload = {'title': '名称', 'description': '', 'priority': 3, 'config': {'conditions': {}, 'execute_every_ms': 60000, 'group_by': [], 'query': '告警', 'query_parameters': [], 'search_within_ms': 60000, 'series': [], 'streams': [], 'type': 'aggregation-v1'}, 'restrain': None, 'field_spec': {}, 'key_spec': [], 'notification_settings': {'grace_period_ms': 60000, 'backlog_size': None}, 'notifications': [], 'alert': False, 'credibility': 3, 'check_type': 'elasticsearch', 'alarm_type': 1001, 'disposal_advice': '', 'check_query': True}
+    resp = api_client.post('/api/plugins/com.andisec.plugins.alarm/events/definitions', json=payload)
+    assert resp.status_code == 200, f'创建告警规则失败，状态码: {resp.status_code}'
+    data = resp.json()
+    assert 'id' in data, '响应中缺少 id 字段'
+    assert 'title' in data, '响应中缺少 title 字段'
+    assert data['id'], '返回的 id 不能为空'
+    return data
+
+class TestAlarm:
+    """告警模块接口测试"""
+
+    def test_post_create_alarm_rule(self, api_client):
+        """测试 POST 创建告警规则的基本功能"""
+        payload = {'title': '名称', 'description': '', 'priority': 3, 'config': {'conditions': {}, 'execute_every_ms': 60000, 'group_by': [], 'query': '告警', 'query_parameters': [], 'search_within_ms': 60000, 'series': [], 'streams': [], 'type': 'aggregation-v1'}, 'restrain': None, 'field_spec': {}, 'key_spec': [], 'notification_settings': {'grace_period_ms': 60000, 'backlog_size': None}, 'notifications': [], 'alert': False, 'credibility': 3, 'check_type': 'elasticsearch', 'alarm_type': 1001, 'disposal_advice': '', 'check_query': True}
+        resp = api_client.post('/api/plugins/com.andisec.plugins.alarm/events/definitions', json=payload)
+        assert resp.status_code == 200, f'期望状态码200，实际: {resp.status_code}'
+        data = resp.json()
+        assert 'id' in data, '响应中缺少 id 字段'
+        assert 'title' in data, '响应中缺少 title 字段'
+        assert 'priority' in data, '响应中缺少 priority 字段'
+        assert 'config' in data, '响应中缺少 config 字段'
+        assert 'notification_settings' in data, '响应中缺少 notification_settings 字段'
+        assert 'credibility' in data, '响应中缺少 credibility 字段'
+        assert 'alarm_type' in data, '响应中缺少 alarm_type 字段'
+        assert isinstance(data, dict), '响应应为字典类型'
+        assert isinstance(data['id'], str), 'id 应为字符串类型'
+        assert isinstance(data['config'], dict), 'config 应为字典类型'
+        assert isinstance(data['notification_settings'], dict), 'notification_settings 应为字典类型'
+        assert data['title'] == '名称', f"title 不一致，期望 '名称'，实际: {data['title']}"
+        assert data['priority'] == 3, f"priority 不一致，期望 3，实际: {data['priority']}"
+        assert data['alert'] == False, f"alert 不一致，期望 False，实际: {data['alert']}"
+        assert data['credibility'] == 3, f"credibility 不一致，期望 3，实际: {data['credibility']}"
+        assert data['alarm_type'] == 1001, f"alarm_type 不一致，期望 1001，实际: {data['alarm_type']}"
+        assert data['check_type'] == 'elasticsearch', f'check_type 不一致'
+        assert data['config']['query'] == '告警', f'config.query 不一致'
+        assert data['config']['type'] == 'aggregation-v1', f'config.type 不一致'
+        assert data['config']['execute_every_ms'] == 60000, f'config.execute_every_ms 不一致'
+        assert data['config']['search_within_ms'] == 60000, f'config.search_within_ms 不一致'
+        rule_id = data['id']
+        cleanup_resp = api_client.delete(f'/api/plugins/com.andisec.plugins.alarm/events/definitions/{rule_id}')
+        assert cleanup_resp.status_code in [200, 204], f'清理告警规则失败，状态码: {cleanup_resp.status_code}'
+
+    def test_delete_alarm_rule(self, api_client, created_alarm_rule):
+        """测试 DELETE 删除告警规则的基本功能"""
+        rule_id = created_alarm_rule['id']
+        assert isinstance(rule_id, str), '规则 ID 应为字符串类型'
+        assert len(rule_id) > 0, '规则 ID 不能为空'
+        resp = api_client.delete(f'/api/plugins/com.andisec.plugins.alarm/events/definitions/{rule_id}')
+        assert resp.status_code in [200, 204], f'期望状态码200或204，实际: {resp.status_code}'
+
+    def test_post_alarm_rules_search(self, api_client):
+        """测试 POST 告警规则搜索的基本功能"""
+        request_body = {'query': '', 'page': 1, 'per_page': 20, 'sort': [], 'fullText': ''}
+        resp = api_client.post('/api/plugins/com.andisec.plugins.alarm/events/definitions/search', json=request_body)
+        assert resp.status_code == 200
+        data = resp.json()
+        assert 'total' in data
+        assert 'page' in data
+        assert 'per_page' in data
+        assert 'count' in data
+        assert 'event_definitions' in data
+        assert isinstance(data['total'], int)
+        assert isinstance(data['page'], int)
+        assert isinstance(data['per_page'], int)
+        assert isinstance(data['count'], int)
+        assert isinstance(data['event_definitions'], list)
+        assert data['page'] == request_body['page']
+        assert data['per_page'] == request_body['per_page']
+        if len(data['event_definitions']) > 0:
+            first_item = data['event_definitions'][0]
+            assert 'id' in first_item
+            assert 'title' in first_item
+            assert 'priority' in first_item
+            assert 'config' in first_item
+            assert isinstance(first_item['id'], str)
+            assert isinstance(first_item['title'], str)
+            assert isinstance(first_item['priority'], int)
+            assert isinstance(first_item['config'], dict)
+        assert data['count'] == len(data['event_definitions'])
+        assert data['count'] <= data['per_page']
+
+    def test_get_alarm_types(self, api_client):
+        """测试 GET 告警类型列表的基本功能"""
+        resp = api_client.get('/api/plugins/com.andisec.plugins.alarm/events/definitions/alarm/types')
+        assert resp.status_code == 200
+        data = resp.json()
+        assert 'code' in data
+        assert 'message' in data
+        assert 'data' in data
+        assert data['code'] == 200
+        assert isinstance(data['message'], str)
+        assert isinstance(data['data'], list)
+        assert len(data['data']) > 0
+        for item in data['data']:
+            assert 'label' in item
+            assert 'value' in item
+            assert isinstance(item['label'], str)
+            assert isinstance(item['value'], str)
+        type_values = [item['value'] for item in data['data']]
+        assert 'alarm_type' in type_values
+        assert 'priority' in type_values
+        assert 'status' in type_values
+        alarm_type_item = next((item for item in data['data'] if item['value'] == 'alarm_type'), None)
+        assert alarm_type_item is not None
+        assert 'children' in alarm_type_item
+        assert isinstance(alarm_type_item['children'], list)
+        assert len(alarm_type_item['children']) > 0
+        first_child = alarm_type_item['children'][0]
+        assert 'label' in first_child
+        assert 'value' in first_child

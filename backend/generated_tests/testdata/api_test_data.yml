@@ -1,0 +1,9 @@
+# 登录测试数据
+test_login_success:
+  - ["superadmin", "Admin@123", true, "登录成功"]
+
+test_login_invalid_password:
+  - ["superadmin", "WrongPassword", false, "密码错误"]
+
+test_login_invalid_username:
+  - ["nonexistent_user", "Admin@123", false, "用户不存在"]

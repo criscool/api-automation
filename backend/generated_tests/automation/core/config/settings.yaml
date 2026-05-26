@@ -1,0 +1,44 @@
+# ============================================================
+# automation 框架 - 全局默认配置
+# ============================================================
+
+project:
+  name: "api-automation-tests"
+  version: "1.0.0"
+
+env: "test"
+
+api:
+  base_url: "https://localhost"
+  timeout: 30
+  verify_ssl: false
+  retry_count: 0
+
+headers:
+  content_type: "application/json"
+  x_requested_by: "XMLHttpRequest"
+  x_requested_with: "XMLHttpRequest"
+
+auth:
+  type: "login"
+  login_path: "/api/system/sessions"
+
+allure:
+  results_dir: "reports/allure-results"
+  report_dir: "reports/allure-report"
+  language: "zh-CN"
+
+logging:
+  level: "INFO"
+  file_level: "DEBUG"
+  log_dir: "logs"
+  max_files: 7
+  format: "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
+
+test_data:
+  dir: "testdata"
+  default_format: "yml"
+
+runner:
+  default_markers: []
+  parallel_workers: 1
