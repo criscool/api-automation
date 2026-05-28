@@ -179,24 +179,30 @@
           
           <!-- 报告文件 -->
           <n-tab-pane name="reports" tab="报告文件">
-            <div v-if="reportDetail.reportFiles && reportDetail.reportFiles.length">
+            <div v-if="sortedReportFiles && sortedReportFiles.length">
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                <n-card 
-                  v-for="report in reportDetail.reportFiles" 
+                <n-card
+                  v-for="report in sortedReportFiles"
                   :key="report.path"
                   hoverable
-                  class="cursor-pointer"
+                  :class="['cursor-pointer', report.isMerged ? 'merged-report-card' : '']"
                 >
                   <div class="text-center">
                     <n-icon size="48" :color="getFileIconColor(report.format)">
                       <Icon :icon="getFileIcon(report.format)" />
                     </n-icon>
                     <div class="mt-3">
-                      <div class="font-medium">{{ report.name }}</div>
-                      <div class="text-sm text-gray-500 mt-1">
-                        {{ report.format.toUpperCase() }} • {{ formatFileSize(report.size) }}
+                      <div class="font-medium flex items-center justify-center gap-2">
+                        <n-tag v-if="report.isMerged" type="success" size="small" :bordered="false">汇总</n-tag>
+                        <span>{{ report.isMerged ? '汇总 Allure 报告' : report.name }}</span>
                       </div>
-                      <div class="text-xs text-gray-400 mt-1">
+                      <div class="text-xs text-gray-500 mt-1" v-if="!report.isMerged && report.scriptFilePath">
+                        {{ getScriptShortName(report.scriptFilePath) }}
+                      </div>
+                      <div class="text-sm text-gray-500 mt-1">
+                        {{ report.format.toUpperCase() }}<template v-if="report.size"> • {{ formatFileSize(report.size) }}</template>
+                      </div>
+                      <div class="text-xs text-gray-400 mt-1" v-if="report.createdAt">
                         {{ formatTime(report.createdAt) }}
                       </div>
                     </div>
@@ -371,15 +377,36 @@ const activeTab = ref('basic')
 // 计算属性
 const filteredScriptResults = computed(() => {
   if (!reportDetail.value?.scriptResults) return []
-  
+
   if (!scriptSearchKeyword.value) {
     return reportDetail.value.scriptResults
   }
-  
+
   return reportDetail.value.scriptResults.filter(script =>
     script.scriptName.toLowerCase().includes(scriptSearchKeyword.value.toLowerCase())
   )
 })
+
+// 报告文件排序：汇总报告置顶，其余按 (script_file_path, format) 稳定排序
+const sortedReportFiles = computed(() => {
+  const files = reportDetail.value?.reportFiles || []
+  const formatOrder = { allure: 0, html: 1, junit: 2, json: 3, xml: 4, txt: 5 }
+  return [...files].sort((a, b) => {
+    if (a.isMerged && !b.isMerged) return -1
+    if (!a.isMerged && b.isMerged) return 1
+    const ap = a.scriptFilePath || ''
+    const bp = b.scriptFilePath || ''
+    if (ap !== bp) return ap.localeCompare(bp)
+    return (formatOrder[a.format] ?? 99) - (formatOrder[b.format] ?? 99)
+  })
+})
+
+// 取脚本路径的文件名（testcases/test_alarm.py → test_alarm.py）
+const getScriptShortName = (path) => {
+  if (!path) return ''
+  const parts = path.split(/[\\/]/)
+  return parts[parts.length - 1] || path
+}
 
 const filteredLogs = computed(() => {
   if (!logLevelFilter.value) return executionLogs.value
@@ -735,5 +762,10 @@ onMounted(() => {
 
 :deep(.warning-row) {
   background-color: #fffbeb;
+}
+
+.merged-report-card {
+  border: 1px solid #18a058;
+  box-shadow: 0 0 0 1px rgba(24, 160, 88, 0.2);
 }
 </style>

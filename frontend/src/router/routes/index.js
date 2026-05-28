@@ -139,6 +139,13 @@ export const basicRoutes = [
         isHidden: true,
         meta: { title: '脚本预览', icon: 'mdi:script-text-outline' },
       },
+      {
+        name: 'ExecutionReportDetail',
+        path: 'execution-reports/:executionId',
+        component: () => import('@/views/api-automation/execution-reports/detail.vue'),
+        isHidden: true,
+        meta: { title: '执行报告详情', icon: 'mdi:file-chart-outline' },
+      },
     ],
   },
 ]

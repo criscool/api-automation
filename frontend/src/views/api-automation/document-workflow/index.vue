@@ -2,7 +2,7 @@
   <div class="document-workflow">
     <!-- 步骤导航 -->
     <n-card class="mb-6">
-      <n-steps :current="currentStep" :status="stepStatus">
+      <n-steps :current="visualStep" :status="stepStatus">
         <n-step title="上传文档" description="上传API文档文件" />
         <n-step title="文档解析" description="智能解析API结构" />
         <n-step title="接口分析" description="深度分析API接口" />
@@ -352,6 +352,15 @@ const message = useMessage()
 // 当前步骤
 const currentStep = ref(1)
 const stepStatus = ref('process')
+
+// 步骤条显示用的视觉步骤（步骤条只有 4 个节点，但 currentStep 有 5 个）
+// 1=上传 / 2=解析中 / 3=解析结果 / 4=接口分析 / 5=生成测试
+const visualStep = computed(() => {
+  const step = currentStep.value
+  if (step <= 2) return step                  // 上传 / 解析
+  if (step === 3 || step === 4) return 3      // 解析结果 + 接口分析 都算"接口分析"步
+  return 4                                    // 生成测试
+})
 
 // 文件上传
 const uploadRef = ref()
@@ -867,6 +876,8 @@ const executeAnalysis = async () => {
       analyzing.value = false
       analysisStatus.value = msg
       message.error(msg)
+      // 失败时停留在"接口分析"步骤显示错误，不要静默回退到表单
+      // 用户可以选择"重试"或返回上一步
     }
 
     const checkAnalysis = async () => {

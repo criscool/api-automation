@@ -60,7 +60,7 @@
     </n-card>
 
     <!-- 执行报告列表 -->
-    <n-card title="报告列表">
+    <n-card title="报告列表" class="list-card">
       <template #header-extra>
         <n-space>
           <n-button 
@@ -82,15 +82,56 @@
       </template>
 
       <n-data-table
+        class="list-table"
+        :flex-height="true"
         :columns="reportColumns"
         :data="reports"
         :loading="loading"
-        :pagination="pagination"
         :row-key="row => row.executionId"
         v-model:checked-row-keys="selectedRowKeys"
-        @update:page="handlePageChange"
-        @update:page-size="handlePageSizeChange"
       />
+
+      <div class="pagination-wrapper">
+        <n-pagination
+          v-model:page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          :item-count="pagination.itemCount"
+          :page-sizes="pagination.pageSizes"
+          :page-slot="7"
+          show-size-picker
+          show-quick-jumper
+          @update:page="handlePageChange"
+          @update:page-size="handlePageSizeChange"
+        >
+          <template #prefix="{ itemCount }">
+            <div class="pagination-prefix">
+              <span class="total-text">共 {{ itemCount }} 条</span>
+              <n-button
+                size="tiny"
+                :disabled="pagination.page === 1"
+                @click="goFirst"
+              >
+                <template #icon>
+                  <n-icon><Icon icon="mdi:page-first" /></n-icon>
+                </template>
+                首页
+              </n-button>
+            </div>
+          </template>
+          <template #suffix>
+            <n-button
+              size="tiny"
+              :disabled="pagination.page >= totalPages"
+              @click="goLast"
+            >
+              尾页
+              <template #icon>
+                <n-icon><Icon icon="mdi:page-last" /></n-icon>
+              </template>
+            </n-button>
+          </template>
+        </n-pagination>
+      </div>
     </n-card>
 
     <!-- 统计分析模态框 -->
@@ -341,6 +382,12 @@ const pagination = ref({
   itemCount: 0,
   showSizePicker: true,
   pageSizes: [10, 20, 50, 100]
+})
+
+// 总页数，用于禁用尾页按钮
+const totalPages = computed(() => {
+  const ps = pagination.value.pageSize || 1
+  return Math.max(1, Math.ceil((pagination.value.itemCount || 0) / ps))
 })
 
 // 选项数据
@@ -725,6 +772,19 @@ const handlePageSizeChange = (pageSize) => {
   loadReports()
 }
 
+const goFirst = () => {
+  if (pagination.value.page === 1) return
+  pagination.value.page = 1
+  loadReports()
+}
+
+const goLast = () => {
+  const last = totalPages.value
+  if (pagination.value.page >= last) return
+  pagination.value.page = last
+  loadReports()
+}
+
 // 工具方法
 const getStatusType = (status) => {
   const statusMap = {
@@ -770,6 +830,29 @@ onMounted(() => {
 <style scoped>
 .execution-reports {
   padding: 20px;
+  height: calc(100vh - 84px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.list-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.list-card :deep(.n-card__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.list-table {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .report-detail {
@@ -779,5 +862,23 @@ onMounted(() => {
 
 .report-preview {
   height: 75vh;
+}
+
+.pagination-wrapper {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.pagination-prefix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.total-text {
+  color: var(--n-text-color, #606266);
+  font-size: 13px;
 }
 </style>

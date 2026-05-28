@@ -688,32 +688,386 @@ async def _execute_script_in_background(
     except Exception as e:
         logger.error(f"后台任务落库失败 execution_id={execution_id}: {e}", exc_info=True)
 
+
+# ============================================================
+# 批量并发执行：单脚本路径不动，新增并发后台任务
+# ============================================================
+
+async def _run_pytest_for_one_script(
+    script_file_path: str,
+    script_dir,
+    generated_tests_dir,
+    env_name: str,
+    timeout: int,
+    nodeids: Optional[List[str]] = None,
+):
+    """跑单个脚本（或脚本里指定的若干 nodeids），仅返回执行原始结果（不落库）。
+
+    nodeids: 如 ["TestAlarm::test_create_alarm_success", ...]，非空时只跑这些方法；
+             空时跑整个文件。
+
+    返回 dict：return_code/stdout/stderr/start_time/end_time/duration/
+              passed/failed/errors/skipped/total/success_rate/report_files
+    """
+    import asyncio
+    import subprocess
+    import shutil
+    import sys
+    from datetime import datetime
+
+    script_dir.mkdir(parents=True, exist_ok=True)
+    start_time = datetime.now()
+
+    # 构造 pytest target：有 nodeids 时跑 file::Class::method，否则跑整个文件
+    if nodeids:
+        targets = [f"{script_file_path}::{nid}" for nid in nodeids]
+    else:
+        targets = [script_file_path]
+
+    junit_path = script_dir / "junit.xml"
+    cmd_parts = [
+        sys.executable, "-m", "pytest", *targets,
+        "--env", env_name,
+        "-v", "--tb=short", "--no-header",
+        "--junitxml", str(junit_path),
+    ]
+
+    html_path = script_dir / "report.html"
+    try:
+        import pytest_html  # noqa: F401
+        cmd_parts.extend(["--html", str(html_path), "--self-contained-html"])
+    except ImportError:
+        html_path = None
+
+    allure_results_dir = script_dir / "allure-results"
+    try:
+        import allure_pytest  # noqa: F401
+        cmd_parts.extend(["--alluredir", str(allure_results_dir)])
+        has_allure_plugin = True
+    except ImportError:
+        has_allure_plugin = False
+
+    return_code = -1
+    stdout = ""
+    stderr = ""
+
+    def _run_pytest():
+        try:
+            return subprocess.run(
+                cmd_parts,
+                cwd=str(generated_tests_dir),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except subprocess.TimeoutExpired as e:
+            return e
+
+    proc_result = await asyncio.to_thread(_run_pytest)
+    if isinstance(proc_result, subprocess.TimeoutExpired):
+        return_code = -1
+        stderr = f"执行超时（{timeout}秒）"
+    else:
+        return_code = proc_result.returncode
+        stdout = proc_result.stdout or ""
+        stderr = proc_result.stderr or ""
+
+    end_time = datetime.now()
+    duration = (end_time - start_time).total_seconds()
+
+    passed = stdout.count(" PASSED")
+    failed = stdout.count(" FAILED")
+    errors = stdout.count(" ERROR")
+    skipped = stdout.count(" SKIPPED")
+    total = passed + failed + errors + skipped
+    success_rate = (passed / total * 100) if total > 0 else 0.0
+
+    # 每脚本独立 Allure 站点（可选，便于单点查看）
+    allure_report_dir = script_dir / "allure-report"
+    allure_generated = False
+    if has_allure_plugin and allure_results_dir.exists():
+        allure_cli = shutil.which("allure")
+        if allure_cli:
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    [allure_cli, "generate", str(allure_results_dir),
+                     "-o", str(allure_report_dir), "--clean"],
+                    capture_output=True, text=True, timeout=60, check=False,
+                )
+                allure_generated = (allure_report_dir / "index.html").exists()
+            except Exception as e:
+                logger.warning(f"生成 Allure 静态站点失败: {e}")
+
+    # 报告文件相对路径（用于拼前端 URL，由调用方加上 execution_id 前缀）
+    report_files = []
+    if allure_generated:
+        report_files.append({
+            "format": "allure", "name": "index.html",
+            "rel_path": f"{script_dir.name}/allure-report/index.html",
+            "abs_path": str(allure_report_dir / "index.html"),
+        })
+    if html_path and html_path.exists():
+        report_files.append({
+            "format": "html", "name": "report.html",
+            "rel_path": f"{script_dir.name}/report.html",
+            "abs_path": str(html_path),
+        })
+    if junit_path.exists():
+        report_files.append({
+            "format": "junit", "name": "junit.xml",
+            "rel_path": f"{script_dir.name}/junit.xml",
+            "abs_path": str(junit_path),
+        })
+
+    return {
+        "return_code": return_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "start_time": start_time,
+        "end_time": end_time,
+        "duration": round(duration, 2),
+        "passed": passed,
+        "failed": failed,
+        "errors": errors,
+        "skipped": skipped,
+        "total": total,
+        "success_rate": round(success_rate, 2),
+        "report_files": report_files,
+        # 暴露原始 allure-results 目录，供批量执行做跨脚本合并
+        "allure_results_dir": str(allure_results_dir) if (has_allure_plugin and allure_results_dir.exists()) else None,
+    }
+
+
+async def _execute_batch_in_background(
+    execution_id: str,
+    scripts_meta: list,
+    generated_tests_dir,
+    execution_dir,
+    env_name: str,
+    timeout: int,
+    max_workers: int,
+    batch_start_time,
+):
+    """批量并发跑脚本 + 聚合落库。
+
+    scripts_meta: List[Dict]，每项 {script_id, script_pk, script_name, file_path}
+    """
+    import asyncio
+    import uuid
+    from datetime import datetime
+    from app.models.api_automation import TestScript, TestExecution, ScriptExecutionResult
+
+    semaphore = asyncio.Semaphore(max_workers)
+    results: list = [None] * len(scripts_meta)
+
+    async def run_one(idx: int, meta: dict):
+        async with semaphore:
+            script_dir = execution_dir / "scripts" / meta["script_id"]
+            try:
+                res = await _run_pytest_for_one_script(
+                    script_file_path=meta["file_path"],
+                    script_dir=script_dir,
+                    generated_tests_dir=generated_tests_dir,
+                    env_name=env_name,
+                    timeout=timeout,
+                )
+                results[idx] = res
+            except Exception as e:
+                logger.error(f"脚本执行异常 script_id={meta['script_id']}: {e}", exc_info=True)
+                results[idx] = {
+                    "return_code": -1,
+                    "stdout": "",
+                    "stderr": f"执行异常: {e}",
+                    "start_time": datetime.now(),
+                    "end_time": datetime.now(),
+                    "duration": 0.0,
+                    "passed": 0, "failed": 0, "errors": 1, "skipped": 0, "total": 0,
+                    "success_rate": 0.0,
+                    "report_files": [],
+                }
+
+    await asyncio.gather(*[run_one(i, m) for i, m in enumerate(scripts_meta)], return_exceptions=False)
+
+    # 聚合统计 + 落库
+    batch_end_time = datetime.now()
+    agg_total = sum(r["total"] for r in results)
+    agg_passed = sum(r["passed"] for r in results)
+    agg_failed = sum(r["failed"] for r in results)
+    agg_errors = sum(r["errors"] for r in results)
+    agg_skipped = sum(r["skipped"] for r in results)
+    agg_success_rate = (agg_passed / agg_total * 100) if agg_total > 0 else 0.0
+
+    # 批次状态：所有脚本 return_code==0 → SUCCESS，否则 FAILED
+    all_ok = all(r["return_code"] == 0 for r in results)
+
+    # 聚合报告文件（URL 加 execution_id 前缀）
+    batch_report_files = []
+    for meta, res in zip(scripts_meta, results):
+        for rf in res["report_files"]:
+            batch_report_files.append({
+                "script_id": meta["script_id"],
+                "script_name": meta["script_name"],
+                "format": rf["format"],
+                "name": rf["name"],
+                "path": rf["abs_path"],
+                "url": f"/reports/{execution_id}/scripts/{rf['rel_path']}",
+            })
+
+    try:
+        test_execution = await TestExecution.filter(execution_id=execution_id).first()
+        if test_execution:
+            test_execution.status = ExecutionStatus.SUCCESS if all_ok else ExecutionStatus.FAILED
+            test_execution.end_time = batch_end_time
+            test_execution.execution_time = round((batch_end_time - batch_start_time).total_seconds(), 2)
+            test_execution.total_tests = agg_total
+            test_execution.passed_tests = agg_passed
+            test_execution.failed_tests = agg_failed
+            test_execution.skipped_tests = agg_skipped
+            test_execution.error_tests = agg_errors
+            test_execution.success_rate = round(agg_success_rate, 2)
+            test_execution.summary = {
+                "script_count": len(scripts_meta),
+                "script_ids": [m["script_id"] for m in scripts_meta],
+                "all_ok": all_ok,
+            }
+            test_execution.report_files = batch_report_files
+            await test_execution.save()
+
+            # 每脚本一行 ScriptExecutionResult
+            for meta, res in zip(scripts_meta, results):
+                script = await TestScript.filter(script_id=meta["script_id"]).first()
+                if not script:
+                    continue
+                await ScriptExecutionResult.create(
+                    result_id=str(uuid.uuid4()),
+                    execution=test_execution,
+                    script=script,
+                    script_name=meta["script_name"],
+                    script_path=meta["file_path"] or "",
+                    start_time=res["start_time"],
+                    end_time=res["end_time"],
+                    duration=res["duration"],
+                    status="PASSED" if res["return_code"] == 0 else "FAILED",
+                    exit_code=res["return_code"],
+                    total_tests=res["total"],
+                    passed_tests=res["passed"],
+                    failed_tests=res["failed"],
+                    skipped_tests=res["skipped"],
+                    error_tests=res["errors"],
+                    stdout=res["stdout"][-5000:] if res["stdout"] else "",
+                    stderr=res["stderr"][-5000:] if res["stderr"] else "",
+                    error_message=res["stderr"][-500:] if res["return_code"] != 0 and res["stderr"] else "",
+                )
+
+                script.execution_count += 1
+                if res["return_code"] == 0:
+                    script.success_count += 1
+                script.last_execution_time = res["end_time"]
+                await script.save()
+    except Exception as e:
+        logger.error(f"批量执行落库失败 execution_id={execution_id}: {e}", exc_info=True)
+
+
 @router.post("/execute", summary="批量执行脚本")
 async def execute_scripts(request: ScriptExecutionRequest):
-    """执行指定的测试脚本"""
-    try:
-        script_service = InterfaceScriptService()
-        result = await script_service.execute_scripts(
-            script_ids=request.script_ids,
-            execution_config=request.execution_config,
-            environment=request.environment,
-            timeout=request.timeout,
-            parallel=request.parallel,
-            max_workers=request.max_workers
-        )
+    """批量启动脚本执行（异步）。多个脚本之间并发，单脚本内部仍串行。
 
-        return {
-            "code": 200,
-            "msg": "OK",
-            "data": result,
-            "success": True
+    立即返回 execution_id，实际跑 pytest + 落库在后台进行，
+    可在「执行报告」页面查看进度和最终结果。
+    """
+    import asyncio
+    import uuid
+    from pathlib import Path
+    from datetime import datetime
+    from app.models.api_automation import TestScript, TestExecution
+
+    if not request.script_ids:
+        raise HTTPException(status_code=400, detail="脚本ID列表不能为空")
+
+    # 加载脚本（需要 select_related 拿 document 外键）
+    scripts = []
+    for sid in request.script_ids:
+        s = await TestScript.filter(
+            script_id=sid, is_active=True, is_executable=True
+        ).select_related("document").first()
+        if not s:
+            raise HTTPException(status_code=404, detail=f"脚本不存在或不可执行: {sid}")
+        scripts.append(s)
+
+    backend_dir = Path(__file__).resolve().parents[4]
+    generated_tests_dir = backend_dir / "generated_tests"
+    reports_root = backend_dir / "reports"
+
+    # 确保脚本文件落盘
+    for s in scripts:
+        sf = generated_tests_dir / s.file_path
+        if not sf.exists():
+            sf.parent.mkdir(parents=True, exist_ok=True)
+            sf.write_text(s.content, encoding="utf-8")
+
+    execution_id = str(uuid.uuid4())
+    execution_dir = reports_root / execution_id
+    execution_dir.mkdir(parents=True, exist_ok=True)
+
+    env_name = request.environment or "test"
+    timeout = request.timeout or 300
+    max_workers = max(1, min(request.max_workers or 4, 8))  # 上限 8
+
+    start_time = datetime.now()
+    await TestExecution.create(
+        execution_id=execution_id,
+        session_id=execution_id,
+        document=scripts[0].document,  # 取首个脚本的文档作为关联
+        execution_config={
+            "script_ids": request.script_ids,
+            "max_workers": max_workers,
+            **(request.execution_config or {}),
+        },
+        environment=env_name,
+        parallel=True,
+        max_workers=max_workers,
+        status=ExecutionStatus.RUNNING,
+        start_time=start_time,
+        description=f"批量执行 {len(scripts)} 个脚本（并发度 {max_workers}）",
+    )
+
+    scripts_meta = [
+        {
+            "script_id": s.script_id,
+            "script_pk": s.id,
+            "script_name": s.name,
+            "file_path": s.file_path,
         }
+        for s in scripts
+    ]
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"执行脚本失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"执行脚本失败: {str(e)}")
+    asyncio.create_task(_execute_batch_in_background(
+        execution_id=execution_id,
+        scripts_meta=scripts_meta,
+        generated_tests_dir=generated_tests_dir,
+        execution_dir=execution_dir,
+        env_name=env_name,
+        timeout=timeout,
+        max_workers=max_workers,
+        batch_start_time=start_time,
+    ))
+
+    return {
+        "code": 200,
+        "msg": "批量执行任务已启动",
+        "data": {
+            "execution_id": execution_id,
+            "script_count": len(scripts),
+            "max_workers": max_workers,
+            "status": "RUNNING",
+            "message": "任务已启动，请在「执行报告」页面查看进度和结果",
+            "start_time": start_time.isoformat(),
+        },
+        "success": True,
+    }
 
 
 @router.post("/{script_id}/execute", summary="执行单个脚本")

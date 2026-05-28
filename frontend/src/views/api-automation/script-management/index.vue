@@ -6,7 +6,7 @@
         <div class="flex items-center space-x-4">
           <n-input
             v-model:value="searchKeyword"
-            placeholder="搜索测试脚本..."
+            placeholder="搜索测试用例..."
             clearable
             style="width: 300px"
             @keyup.enter="loadTestScripts"
@@ -15,34 +15,18 @@
               <n-icon><Icon icon="mdi:magnify" /></n-icon>
             </template>
           </n-input>
-          
+
           <n-select
             v-model:value="filterStatus"
             :options="statusOptions"
-            placeholder="状态筛选"
+            placeholder="测试类型筛选"
             clearable
-            style="width: 150px"
-            @update:value="loadTestScripts"
-          />
-          
-          <n-select
-            v-model:value="filterFramework"
-            :options="frameworkOptions"
-            placeholder="框架筛选"
-            clearable
-            style="width: 150px"
+            style="width: 180px"
             @update:value="loadTestScripts"
           />
         </div>
-        
-        <n-space>
-          <n-button type="primary" @click="showCreateModal = true">
-            <template #icon>
-              <n-icon><Icon icon="mdi:plus" /></n-icon>
-            </template>
-            新建测试
-          </n-button>
 
+        <n-space>
           <n-button @click="batchExecute" :disabled="!selectedScripts.length">
             <template #icon>
               <n-icon><Icon icon="mdi:play" /></n-icon>
@@ -61,21 +45,67 @@
     </n-card>
 
     <!-- 测试脚本列表 -->
-    <n-card title="测试脚本列表">
+    <n-card
+      title="测试脚本列表"
+      class="list-card"
+      :content-style="{ display: 'flex', flexDirection: 'column', minHeight: 0, padding: '20px' }"
+    >
       <n-data-table
+        class="list-table"
         :columns="scriptColumns"
         :data="testScripts"
         :loading="loading"
-        :pagination="pagination"
-        :row-key="(row) => row.script_id"
+        :row-key="(row) => row.test_id"
         :scroll-x="1300"
+        :flex-height="true"
         @update:checked-row-keys="handleSelectionChange"
-        @update:page="handlePageChange"
       />
+
+      <div class="pagination-wrapper">
+        <n-pagination
+          v-model:page="pagination.page"
+          v-model:page-size="pagination.pageSize"
+          :item-count="pagination.itemCount"
+          :page-sizes="pagination.pageSizes"
+          :page-slot="7"
+          show-size-picker
+          show-quick-jumper
+          @update:page="handlePageChange"
+          @update:page-size="handlePageSizeChange"
+        >
+          <template #prefix="{ itemCount }">
+            <div class="pagination-prefix">
+              <span class="total-text">共 {{ itemCount }} 条</span>
+              <n-button
+                size="tiny"
+                :disabled="pagination.page === 1"
+                @click="goFirst"
+              >
+                <template #icon>
+                  <n-icon><Icon icon="mdi:page-first" /></n-icon>
+                </template>
+                首页
+              </n-button>
+            </div>
+          </template>
+          <template #suffix>
+            <n-button
+              size="tiny"
+              :disabled="pagination.page >= totalPages"
+              @click="goLast"
+            >
+              尾页
+              <template #icon>
+                <n-icon><Icon icon="mdi:page-last" /></n-icon>
+              </template>
+            </n-button>
+          </template>
+        </n-pagination>
+      </div>
     </n-card>
 
-    <!-- 脚本详情/编辑模态框 -->
-    <n-modal v-model:show="showScriptModal" preset="card" title="测试脚本详情" style="width: 90%">
+    <!-- 用例详情/编辑模态框 -->
+    <n-modal v-model:show="showScriptModal" preset="card" title="测试用例详情" style="width: 90%">
       <div v-if="selectedScript">
         <n-tabs type="line" v-model:value="activeTab">
           <n-tab-pane name="info" tab="基本信息">
@@ -87,51 +117,60 @@
             >
               <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <n-form-item label="脚本名称" path="scriptName">
-                    <n-input v-model:value="scriptForm.scriptName" />
+                  <n-form-item label="用例名称" path="scriptName">
+                    <n-input v-model:value="scriptForm.scriptName" readonly />
                   </n-form-item>
-                  
-                  <n-form-item label="测试框架" path="framework">
-                    <n-select v-model:value="scriptForm.framework" :options="frameworkOptions" />
-                  </n-form-item>
-                  
+
                   <n-form-item label="测试类型" path="testType">
-                    <n-select v-model:value="scriptForm.testType" :options="testTypeOptions" />
+                    <n-select v-model:value="scriptForm.testType" :options="testTypeOptions" disabled />
                   </n-form-item>
-                  
+
                   <n-form-item label="优先级" path="priority">
-                    <n-select v-model:value="scriptForm.priority" :options="priorityOptions" />
+                    <n-input v-model:value="scriptForm.priority" readonly />
+                  </n-form-item>
+
+                  <n-form-item label="所在脚本文件" path="scriptFilePath">
+                    <n-input v-model:value="scriptForm.scriptFilePath" readonly />
+                  </n-form-item>
+
+                  <n-form-item label="pytest 节点" path="pytestNodeId">
+                    <n-input
+                      :value="scriptForm.className && scriptForm.methodName
+                        ? `${scriptForm.className}::${scriptForm.methodName}`
+                        : (scriptForm.methodName || '-')"
+                      readonly
+                    />
                   </n-form-item>
                 </div>
-                
+
                 <div>
                   <n-form-item label="关联接口" path="endpointPath">
                     <n-input v-model:value="scriptForm.endpointPath" readonly />
                   </n-form-item>
-                  
+
                   <n-form-item label="HTTP方法" path="httpMethod">
                     <n-tag :type="getMethodType(scriptForm.httpMethod)">
                       {{ scriptForm.httpMethod }}
                     </n-tag>
                   </n-form-item>
-                  
+
                   <n-form-item label="超时时间" path="timeout">
-                    <n-input-number v-model:value="scriptForm.timeout" :min="1" :max="300" />
+                    <n-input-number v-model:value="scriptForm.timeout" :min="1" :max="300" disabled />
                     <span class="ml-2 text-gray-500">秒</span>
                   </n-form-item>
-                  
+
                   <n-form-item label="重试次数" path="retryCount">
-                    <n-input-number v-model:value="scriptForm.retryCount" :min="0" :max="5" />
+                    <n-input-number v-model:value="scriptForm.retryCount" :min="0" :max="5" disabled />
                   </n-form-item>
                 </div>
               </div>
-              
+
               <n-form-item label="描述" path="description">
                 <n-input
                   v-model:value="scriptForm.description"
                   type="textarea"
                   :rows="3"
-                  placeholder="测试脚本描述..."
+                  readonly
                 />
               </n-form-item>
             </n-form>
@@ -247,65 +286,13 @@
               <template #icon>
                 <n-icon><Icon icon="mdi:play" /></n-icon>
               </template>
-              执行测试
-            </n-button>
-            <n-button @click="() => debugScript()" :loading="debugging">
-              <template #icon>
-                <n-icon><Icon icon="mdi:bug" /></n-icon>
-              </template>
-              调试模式
+              执行用例
             </n-button>
           </n-space>
-          
+
           <n-space>
-            <n-button @click="showScriptModal = false">取消</n-button>
-            <n-button type="primary" @click="saveScript" :loading="saving">保存</n-button>
+            <n-button @click="showScriptModal = false">关闭</n-button>
           </n-space>
-        </div>
-      </template>
-    </n-modal>
-
-    <!-- 新建测试模态框 -->
-    <n-modal v-model:show="showCreateModal" preset="card" title="新建测试脚本" style="width: 600px">
-      <n-form ref="createFormRef" :model="createForm" label-placement="left" label-width="120px">
-        <n-form-item label="选择接口" path="endpointId" required>
-          <n-select
-            v-model:value="createForm.endpointId"
-            :options="endpointOptions"
-            placeholder="选择要测试的接口"
-            filterable
-            @update:value="handleEndpointSelect"
-          />
-        </n-form-item>
-        
-        <n-form-item label="脚本名称" path="scriptName" required>
-          <n-input v-model:value="createForm.scriptName" placeholder="输入脚本名称" />
-        </n-form-item>
-        
-        <n-form-item label="测试框架" path="framework" required>
-          <n-select v-model:value="createForm.framework" :options="frameworkOptions" />
-        </n-form-item>
-        
-        <n-form-item label="测试类型" path="testType" required>
-          <n-select v-model:value="createForm.testType" :options="testTypeOptions" />
-        </n-form-item>
-        
-        <n-form-item label="生成模板">
-          <n-checkbox-group v-model:value="createForm.templateOptions">
-            <n-space vertical>
-              <n-checkbox value="basic_structure">基础结构</n-checkbox>
-              <n-checkbox value="mock_data">模拟数据</n-checkbox>
-              <n-checkbox value="assertions">智能断言</n-checkbox>
-              <n-checkbox value="error_handling">错误处理</n-checkbox>
-            </n-space>
-          </n-checkbox-group>
-        </n-form-item>
-      </n-form>
-
-      <template #footer>
-        <div class="flex justify-end space-x-2">
-          <n-button @click="showCreateModal = false">取消</n-button>
-          <n-button type="primary" @click="createTestScript" :loading="creating">创建</n-button>
         </div>
       </template>
     </n-modal>
@@ -368,7 +355,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, h, shallowRef } from 'vue'
+import { ref, computed, onMounted, h, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
 import { NButton, NTag, useMessage } from 'naive-ui'
 import { Icon } from '@iconify/vue'
@@ -400,7 +387,6 @@ const loading = ref(false)
 const selectedScripts = ref([])
 const searchKeyword = ref('')
 const filterStatus = ref('')
-const filterFramework = ref('')
 
 // 模态框状态
 const showScriptModal = ref(false)
@@ -433,17 +419,23 @@ const pagination = ref({
   page: 1,
   pageSize: 20,
   itemCount: 0,
-  showSizePicker: true,
-  pageSizes: [10, 20, 50]
+  pageSizes: [10, 20, 50, 100]
+})
+
+// 总页数，用于禁用尾页按钮
+const totalPages = computed(() => {
+  const ps = pagination.value.pageSize || 1
+  return Math.max(1, Math.ceil((pagination.value.itemCount || 0) / ps))
 })
 
 // 选项数据
 const statusOptions = [
-  { label: '全部', value: '' },
-  { label: '草稿', value: 'draft' },
-  { label: '就绪', value: 'ready' },
-  { label: '运行中', value: 'running' },
-  { label: '已完成', value: 'completed' }
+  { label: '全部类型', value: '' },
+  { label: '正向', value: 'positive' },
+  { label: '异常', value: 'negative' },
+  { label: '边界', value: 'boundary' },
+  { label: '安全', value: 'security' },
+  { label: '性能', value: 'performance' }
 ]
 
 const frameworkOptions = [
@@ -453,7 +445,8 @@ const frameworkOptions = [
 ]
 
 const testTypeOptions = [
-  { label: '功能测试', value: 'functional' },
+  { label: '正向测试', value: 'positive' },
+  { label: '异常测试', value: 'negative' },
   { label: '边界测试', value: 'boundary' },
   { label: '安全测试', value: 'security' },
   { label: '性能测试', value: 'performance' }
@@ -477,13 +470,13 @@ const prerequisiteOptions = ref([])
 // 表格列定义
 const scriptColumns = [
   { type: 'selection' },
-  { title: '脚本名称', key: 'name', width: 200, ellipsis: true },
+  { title: '用例名称', key: 'name', width: 240, ellipsis: { tooltip: true } },
   {
     title: '接口信息',
     key: 'interface_info',
     width: 300,
     render: (row) => {
-      if (row.interface_info) {
+      if (row.interface_info && row.interface_info.method) {
         return h('div', [
           h('div', { style: 'font-weight: bold; margin-bottom: 4px;' }, row.interface_info.name || '未知接口'),
           h('div', { style: 'font-size: 12px; color: #666;' }, [
@@ -499,42 +492,54 @@ const scriptColumns = [
       return h('span', { style: 'color: #999;' }, '无关联接口')
     }
   },
-  { title: '框架', key: 'framework', width: 100 },
   {
-    title: '状态',
-    key: 'status',
+    title: '所在脚本',
+    key: 'script_file_name',
+    width: 200,
+    ellipsis: { tooltip: true },
+    render: (row) => row.script_file_name
+      ? h('span', { style: 'font-family: ui-monospace, SFMono-Regular, monospace;' }, row.script_file_name)
+      : h('span', { style: 'color: #999;' }, '-')
+  },
+  {
+    title: '测试类型',
+    key: 'test_type',
     width: 100,
     render: (row) => {
-      const statusMap = {
-        'ACTIVE': { type: 'success', text: '活跃' },
-        'INACTIVE': { type: 'default', text: '非活跃' },
-        'DRAFT': { type: 'warning', text: '草稿' },
-        'ARCHIVED': { type: 'info', text: '已归档' }
+      const typeMap = {
+        positive: { type: 'success', text: '正向' },
+        negative: { type: 'warning', text: '异常' },
+        boundary: { type: 'info', text: '边界' },
+        security: { type: 'error', text: '安全' },
+        performance: { type: 'default', text: '性能' },
       }
-      const status = statusMap[row.status] || { type: 'default', text: row.status || '未知' }
-      return h(NTag, { type: status.type }, { default: () => status.text })
+      const t = typeMap[row.test_type] || { type: 'default', text: row.test_type || '-' }
+      return h(NTag, { type: t.type, size: 'small' }, { default: () => t.text })
     }
   },
   {
-    title: '质量评分',
-    key: 'code_quality_score',
-    width: 100,
+    title: '最近执行',
+    key: 'last_execution_status',
+    width: 110,
     render: (row) => {
-      const score = row.code_quality_score || 'N/A'
-      const color = score === 'A' ? 'success' : score === 'B' ? 'warning' : 'default'
-      return h(NTag, { type: color, size: 'small' }, { default: () => score })
+      if (!row.last_execution_status) return h('span', { style: 'color: #999;' }, '未执行')
+      const map = {
+        PASSED: 'success', FAILED: 'error', ERROR: 'error', SKIPPED: 'warning',
+      }
+      return h(NTag, { type: map[row.last_execution_status] || 'default', size: 'small' },
+        { default: () => row.last_execution_status })
     }
   },
   {
     title: '最后执行',
     key: 'last_execution_time',
     width: 150,
-    render: (row) => formatTime(row.last_execution_time)
+    render: (row) => row.last_execution_time ? formatTime(row.last_execution_time) : '-'
   },
   {
     title: '操作',
     key: 'actions',
-    width: 240,
+    width: 200,
     fixed: 'right',
     render: (row) => [
       h(NButton,
@@ -543,14 +548,14 @@ const scriptColumns = [
           type: 'primary',
           onClick: () => editScript(row)
         },
-        { default: () => '编辑' }
+        { default: () => '详情' }
       ),
       h(NButton,
         {
           size: 'small',
           type: 'info',
           style: 'margin-left: 8px',
-          loading: executing.value && executingId.value === (row.script_id || row.scriptId),
+          loading: executing.value && executingId.value === row.test_id,
           onClick: () => executeScript(row)
         },
         { default: () => '执行' }
@@ -583,66 +588,30 @@ const loadTestScripts = async () => {
     const params = {
       page: pagination.value.page,
       page_size: pagination.value.pageSize,
-      search: searchKeyword.value,
-      status: filterStatus.value,
-      framework: filterFramework.value,
+      search: searchKeyword.value || undefined,
+      test_type: filterStatus.value || undefined,
       include_inactive: false
     }
 
-    console.log('加载脚本参数:', params)
-    const response = await api.getAllScripts(params)
-    console.log('脚本响应:', response)
-    console.log('响应类型:', typeof response)
-    console.log('响应结构:', Object.keys(response || {}))
+    const response = await api.getAllTestCases(params)
 
-    // 检查响应数据结构
-    if (response && response.data && response.data.scripts) {
-      console.log('✅ 检测到正确的数据结构')
-      // 转换数据格式，确保字段名匹配
-      const scripts = response.data.scripts || []
-      testScripts.value = scripts.map(script => ({
-        ...script,
-        scriptId: script.script_id, // 添加前端期望的字段名
-        scriptName: script.name,    // 添加脚本名称的别名
-      }))
+    if (response && response.data && Array.isArray(response.data.items)) {
+      testScripts.value = response.data.items
       pagination.value.itemCount = response.data.total || 0
-
-      console.log(`✅ 成功加载 ${testScripts.value.length} 个脚本`)
-      console.log('转换后的脚本数据:', testScripts.value)
-
       if (testScripts.value.length === 0) {
-        message.info('暂无测试脚本数据')
-      } else {
-        message.success(`成功加载 ${testScripts.value.length} 个脚本`)
+        message.info('暂无测试用例数据')
       }
     } else {
-      console.error('❌ 脚本响应格式错误:', response)
-      console.error('期望的结构: response.data.scripts')
-      console.error('实际结构:', response)
+      console.error('用例列表响应格式异常:', response)
       testScripts.value = []
       pagination.value.itemCount = 0
-      message.warning('获取脚本列表失败，数据格式不正确')
+      message.warning('获取用例列表失败，数据格式不正确')
     }
   } catch (error) {
-    console.error('❌ 加载测试脚本失败:', error)
-    console.error('错误详情:', error)
-
-    // 检查错误中是否包含数据
-    if (error && error.error && error.error.data && error.error.data.scripts) {
-      console.log('🔄 从错误对象中提取数据')
-      const scripts = error.error.data.scripts || []
-      testScripts.value = scripts.map(script => ({
-        ...script,
-        scriptId: script.script_id,
-        scriptName: script.name,
-      }))
-      pagination.value.itemCount = error.error.data.total || 0
-      message.success(`从错误中恢复，成功加载 ${testScripts.value.length} 个脚本`)
-    } else {
-      message.error('加载测试脚本失败: ' + (error.message || '未知错误'))
-      testScripts.value = []
-      pagination.value.itemCount = 0
-    }
+    console.error('加载测试用例失败:', error)
+    message.error('加载测试用例失败: ' + (error.message || '未知错误'))
+    testScripts.value = []
+    pagination.value.itemCount = 0
   } finally {
     loading.value = false
   }
@@ -669,131 +638,117 @@ const handlePageChange = (page) => {
   loadTestScripts()
 }
 
-const editScript = async (script) => {
-  console.log('编辑脚本参数:', script)
-  console.log('参数类型:', typeof script)
+const handlePageSizeChange = (pageSize) => {
+  pagination.value.pageSize = pageSize
+  pagination.value.page = 1
+  loadTestScripts()
+}
 
-  // 安全地处理script对象
-  if (!script || typeof script !== 'object') {
-    console.error('无效的脚本对象:', script)
-    message.error('无效的脚本数据')
+const goFirst = () => {
+  if (pagination.value.page === 1) return
+  pagination.value.page = 1
+  loadTestScripts()
+}
+
+const goLast = () => {
+  const last = totalPages.value
+  if (pagination.value.page >= last) return
+  pagination.value.page = last
+  loadTestScripts()
+}
+
+const editScript = async (testCase) => {
+  if (!testCase || typeof testCase !== 'object' || !testCase.test_id) {
+    message.error('无效的用例数据')
     return
   }
 
-  selectedScript.value = script
+  selectedScript.value = testCase
 
-  // 安全地复制脚本数据，避免"target must be an object"错误
-  try {
-    scriptForm.value = {
-      scriptId: script.script_id || script.scriptId || '',
-      scriptName: script.name || script.scriptName || '',
-      description: script.description || '',
-      framework: script.framework || 'pytest',
-      language: script.language || 'python',
-      testType: script.test_type || 'functional',
-      priority: script.priority || 'medium',
-      endpointPath: script.interface_info?.path || '',
-      httpMethod: script.interface_info?.method || '',
-      timeout: script.timeout || 30,
-      retryCount: script.retry_count || 0,
-      environment: script.environment || 'test',
-      parallelExecution: script.parallel_execution || false,
-      dataDrivern: script.data_driven || false,
-      prerequisites: script.prerequisites || [],
-      scriptContent: script.content || ''
-    }
-  } catch (error) {
-    console.error('复制脚本数据失败:', error)
-    message.error('处理脚本数据失败')
-    return
+  // 详情弹窗的表单结构沿用，把用例信息映射进去（含所在脚本文件）
+  scriptForm.value = {
+    testId: testCase.test_id,
+    scriptName: testCase.name || '',
+    description: testCase.description || '',
+    framework: 'pytest',
+    language: 'python',
+    testType: testCase.test_type || 'positive',
+    priority: testCase.priority || 'P2',
+    endpointPath: testCase.interface_info?.path || '',
+    httpMethod: testCase.interface_info?.method || '',
+    timeout: testCase.timeout || 30,
+    retryCount: testCase.retry_count || 0,
+    environment: 'test',
+    parallelExecution: false,
+    dataDrivern: false,
+    prerequisites: [],
+    scriptFilePath: testCase.script_file_path || '',
+    scriptFileName: testCase.script_file_name || '',
+    className: testCase.class_name || '',
+    methodName: testCase.method_name || '',
+    scriptContent: ''
   }
 
-  // 获取脚本详细信息（包含脚本内容）
+  // 获取用例详情（含 test_data / assertions），并尝试读取所在脚本内容
   try {
-    const scriptId = script.script_id || script.scriptId
-    console.log('获取脚本详情:', scriptId)
-
-    const detailResponse = await api.getScriptDetail(scriptId)
-    console.log('脚本详情响应:', detailResponse)
-
-    if (detailResponse && detailResponse.data) {
-      // 安全地更新脚本表单数据
+    const detailResp = await api.getTestCaseDetail(testCase.test_id)
+    if (detailResp && detailResp.data) {
+      const d = detailResp.data
       scriptForm.value = {
         ...scriptForm.value,
-        scriptContent: detailResponse.data.content || '',
-        scriptId: detailResponse.data.script_id || scriptForm.value.scriptId,
-        scriptName: detailResponse.data.name || scriptForm.value.scriptName,
-        description: detailResponse.data.description || scriptForm.value.description,
-        framework: detailResponse.data.framework || scriptForm.value.framework,
-        language: detailResponse.data.language || scriptForm.value.language
+        scriptName: d.name || scriptForm.value.scriptName,
+        description: d.description || scriptForm.value.description,
+        testType: d.test_type || scriptForm.value.testType,
+        priority: d.priority || scriptForm.value.priority,
+        scriptFilePath: d.script_file_path || scriptForm.value.scriptFilePath,
+        scriptFileName: d.script_file_name || scriptForm.value.scriptFileName,
+        className: d.class_name || scriptForm.value.className,
+        methodName: d.method_name || scriptForm.value.methodName,
+        testData: d.test_data || [],
+        assertions: d.assertions || [],
       }
-      console.log('脚本内容长度:', detailResponse.data.content?.length || 0)
     }
   } catch (error) {
-    console.error('获取脚本详情失败:', error)
-    message.error('获取脚本详情失败: ' + (error.message || '未知错误'))
+    console.error('获取用例详情失败:', error)
+    message.error('获取用例详情失败: ' + (error.message || '未知错误'))
   }
 
-  // 加载执行历史
-  try {
-    const scriptId = script.script_id || script.scriptId
-    const response = await api.getScriptExecutionHistory(scriptId)
-    executionHistory.value = response.data || []
-  } catch (error) {
-    console.error('加载执行历史失败:', error)
-    executionHistory.value = []
-  }
-
+  executionHistory.value = []
   showScriptModal.value = true
 }
 
-const executeScript = async (script) => {
-  // 防御：模板按钮可能误把 MouseEvent / ref 对象当参数传入，统一回落到 selectedScript
-  if (script && typeof script === 'object' && 'value' in script && !script.script_id) {
-    script = script.value
+const executeScript = async (testCase) => {
+  if (testCase && typeof testCase === 'object' && 'value' in testCase && !testCase.test_id) {
+    testCase = testCase.value
   }
-  if (!script || !(script.script_id || script.scriptId)) {
-    script = selectedScript.value
+  if (!testCase || !testCase.test_id) {
+    testCase = selectedScript.value
   }
-  if (!script) {
-    message.error('无效的脚本ID')
+  if (!testCase || !testCase.test_id) {
+    message.error('无效的用例ID')
     return
   }
 
-  const scriptId = script.script_id || script.scriptId
-  if (!scriptId) {
-    message.error('无效的脚本ID')
-    return
-  }
-
+  const testId = testCase.test_id
   executing.value = true
-  executingId.value = scriptId
+  executingId.value = testId
   try {
-    // 同步执行：在 generated_tests/ 中跑 pytest，自动生成 JUnit/HTML/Allure 报告并落库
-    const response = await api.runSingleScript(scriptId, {
-      execution_config: {
-        framework: script.framework || 'pytest',
-        verbose: true
-      },
+    const response = await api.runTestCase(testId, {
       environment: 'test',
       timeout: 300
     })
 
     if (response.code === 200 && response.data) {
       const { execution_id: executionId } = response.data
-      message.success(`执行任务已启动（ID: ${executionId}），可在「执行报告」页查看进度`)
-
-      // 关闭编辑弹窗（如果开着）
+      message.success(`用例执行任务已启动（ID: ${executionId}），可在「执行报告」页查看进度`)
       showScriptModal.value = false
-
-      // 刷新列表更新执行时间
       await loadTestScripts()
     } else {
       message.error('启动执行失败: ' + (response.msg || '未知错误'))
     }
   } catch (error) {
-    console.error('执行脚本失败:', error)
-    message.error('执行脚本失败: ' + (error.message || '未知错误'))
+    console.error('执行用例失败:', error)
+    message.error('执行用例失败: ' + (error.message || '未知错误'))
   } finally {
     executing.value = false
     executingId.value = null
@@ -938,20 +893,48 @@ const createTestScript = async () => {
   }
 }
 
-const deleteScript = async (script) => {
+const deleteScript = async (testCase) => {
   try {
-    const scriptId = script.script_id || script.scriptId
-    await api.deleteScript(scriptId)
+    const testId = testCase.test_id
+    if (!testId) {
+      message.error('无效的用例ID')
+      return
+    }
+    await api.deleteTestCase(testId)
     message.success('删除成功')
-    await loadTestScripts() // 重新加载列表
+    await loadTestScripts()
   } catch (error) {
-    console.error('删除脚本失败:', error)
-    message.error('删除脚本失败: ' + (error.message || '未知错误'))
+    console.error('删除用例失败:', error)
+    message.error('删除用例失败: ' + (error.message || '未知错误'))
   }
 }
 
-const batchExecute = () => {
-  message.info('批量执行功能开发中...')
+const batchExecute = async () => {
+  if (!selectedScripts.value.length) {
+    message.warning('请先勾选要执行的用例')
+    return
+  }
+
+  try {
+    const response = await api.executeTestCases({
+      test_ids: selectedScripts.value,
+      environment: 'test',
+      timeout: 300,
+      max_workers: 4,
+    })
+
+    if (response.code === 200 && response.data) {
+      const { execution_id, test_case_count, script_count, max_workers } = response.data
+      message.success(`已提交 ${test_case_count} 条用例（${script_count} 个脚本并发度 ${max_workers}）`)
+      router.push(`/api-automation/execution-reports/${execution_id}`)
+    } else {
+      message.error('启动批量执行失败: ' + (response.msg || '未知错误'))
+    }
+  } catch (error) {
+    console.error('批量执行失败:', error)
+    const detail = error?.response?.data?.detail || error?.message || '未知错误'
+    message.error('批量执行失败: ' + detail)
+  }
 }
 
 const formatCode = () => {
@@ -1154,6 +1137,45 @@ onMounted(async () => {
 <style scoped>
 .test-management {
   padding: 20px;
+  height: calc(100vh - 84px);
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+}
+
+.list-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.list-card :deep(.n-card__content) {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.list-table {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.pagination-wrapper {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.pagination-prefix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.total-text {
+  color: var(--n-text-color, #606266);
+  font-size: 13px;
 }
 
 .code-editor-container {

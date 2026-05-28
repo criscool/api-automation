@@ -67,6 +67,7 @@ export default {
   // 接口管理API
   getApiInterfaces: (params = {}) => request.get('/interface/interfaces', { params }),
   getApiInterfaceDetail: (interfaceId) => request.get(`/interface/interfaces/${interfaceId}`),
+  deleteApiInterface: (interfaceId) => request.delete(`/interface/interfaces/${interfaceId}`),
   getInterfaceStatistics: () => request.get('/interface/statistics'),
   generateInterfaceScript: (interfaceId) => request.post(`/interface/interfaces/${interfaceId}/generate-script`),
   resolveDuplicates: (data) => request.post('/interface/resolve-duplicates', data),
@@ -93,6 +94,13 @@ export default {
   getScriptExecutionDetail: (executionId) => request.get(`/scripts/executions/${executionId}`),
   getScriptExecutionLogs: (executionId, params = {}) => request.get(`/scripts/executions/${executionId}/logs`, { params }),
   stopScriptExecution: (executionId) => request.post(`/scripts/executions/${executionId}/stop`),
+
+  // 用例管理API（脚本管理页面切换到用例维度）
+  getAllTestCases: (params = {}) => request.get('/testcases', { params }),
+  getTestCaseDetail: (testId) => request.get(`/testcases/${testId}`),
+  deleteTestCase: (testId) => request.delete(`/testcases/${testId}`),
+  runTestCase: (testId, data = {}) => request.post(`/testcases/${testId}/run`, data),
+  executeTestCases: (data) => request.post('/testcases/execute', data),
 
   // 原有接口管理（保持兼容）
   getApiEndpoints: (params = {}) => request.get('/api-automation/endpoints', { params }),

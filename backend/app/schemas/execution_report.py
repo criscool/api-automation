@@ -61,6 +61,8 @@ class ReportFile(BaseModel):
     created_at: datetime = Field(description="创建时间")
     download_url: str = Field(description="下载链接")
     preview_url: Optional[str] = Field(default=None, description="可直接在浏览器打开的预览 URL（Allure 等静态站点用）")
+    script_file_path: Optional[str] = Field(default="", description="所属脚本相对路径；汇总报告留空")
+    is_merged: bool = Field(default=False, description="是否为合并后的汇总报告")
 
 
 class ExecutionStatistics(BaseModel):

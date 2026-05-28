@@ -12,5 +12,6 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=9999,
         reload=True,
+        reload_dirs=["app"],
         log_config=str(log_config_path) if log_config_path.exists() else None
     )

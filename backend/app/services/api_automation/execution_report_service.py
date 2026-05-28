@@ -163,7 +163,9 @@ class ExecutionReportService:
                             size=file_path.stat().st_size,
                             created_at=datetime.fromtimestamp(file_path.stat().st_ctime),
                             download_url=f"/api/v1/execution-reports/{execution_id}/download/{file_path.name}",
-                            preview_url=file_info.get("url")
+                            preview_url=file_info.get("url"),
+                            script_file_path=file_info.get("script_file_path", "") or "",
+                            is_merged=bool(file_info.get("is_merged", False)),
                         )
                         report_files.append(report_file)
             

@@ -343,6 +343,8 @@ class GeneratedScript(BaseModel):
     framework: str = Field("pytest", description="测试框架")
     dependencies: List[str] = Field(default_factory=list, description="依赖包")
     execution_order: int = Field(1, description="执行顺序")
+    # 用例方法映射：test_case_id -> {class_name, method_name}，用于落库 TestCase + pytest nodeid
+    case_method_map: Dict[str, Dict[str, str]] = Field(default_factory=dict, description="用例方法映射")
 
 
 class ScriptGenerationOutput(BaseModel):
@@ -364,6 +366,9 @@ class ScriptPersistenceInput(BaseModel):
     document_id: str = Field(..., description="文档ID")
     interface_id: str = Field(..., description="接口ID")
     scripts: List[GeneratedScript] = Field(..., description="脚本列表")
+    # 用例和端点信息（用于落库 TestCase 表并计算展示名）
+    test_cases: List[GeneratedTestCase] = Field(default_factory=list, description="测试用例列表")
+    endpoints: List[ParsedEndpoint] = Field(default_factory=list, description="端点列表")
     config_files: Dict[str, str] = Field(default_factory=dict, description="配置文件")
     requirements_txt: str = Field("", description="依赖文件内容")
     readme_content: str = Field("", description="README内容")

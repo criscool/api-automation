@@ -143,15 +143,31 @@ class HttpAuditLogMiddleware(BaseHTTPMiddleware):
         if value is None:
             return None
         if isinstance(value, (dict, list)):
-            return value
+            # 即便是 dict/list，也可能包含 datetime/bytes 等不可序列化的类型
+            # 强制走一遍 json.dumps 验证，失败则降级为字符串描述
+            try:
+                json.dumps(value, ensure_ascii=False, default=str)
+                return value
+            except (ValueError, TypeError):
+                try:
+                    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+                except Exception:
+                    return {"_audit_log_warning": "原始内容不可序列化", "_repr": str(value)[:500]}
         if isinstance(value, str):
             if value.strip() == "":
                 return None
             try:
                 return json.loads(value)
             except (ValueError, TypeError):
-                return None
-        return value
+                # 非 JSON 字符串（如 HTML、纯文本、Allure 报告内容）：
+                # 截断并包装成 JSON 友好的格式，而不是直接返回 None
+                truncated = value[:500] if len(value) > 500 else value
+                return {"_raw_text": truncated}
+        # 数字、布尔等基本类型直接返回
+        if isinstance(value, (int, float, bool)):
+            return value
+        # 其他不可识别类型：转字符串
+        return {"_audit_log_warning": "未识别类型", "_repr": str(value)[:500]}
 
     async def get_request_log(self, request: Request, response: Response) -> dict:
         """

@@ -1008,7 +1008,7 @@ const interfaceColumns = [
   {
     title: '操作',
     key: 'actions',
-    width: 200,
+    width: 280,
     render(row) {
       return [
         h(NButton, {
@@ -1037,6 +1037,15 @@ const interfaceColumns = [
         }, {
           default: () => '脚本管理',
           icon: () => h(Icon, { icon: 'mdi:script-text-outline' })
+        }),
+        h(NButton, {
+          size: 'small',
+          type: 'error',
+          style: 'margin-left: 8px;',
+          onClick: () => deleteInterface(row)
+        }, {
+          default: () => '删除',
+          icon: () => h(Icon, { icon: 'mdi:delete' })
         })
       ]
     }
@@ -1978,6 +1987,27 @@ const deleteDocument = (document) => {
         refreshInterfaces()
       } catch (error) {
         message.error('删除失败')
+      }
+    }
+  })
+}
+
+// 删除接口（关联激活用例时后端会拒绝并由拦截器弹错误提示）
+const deleteInterface = (interfaceItem) => {
+  dialog.warning({
+    title: '确认删除',
+    content: `确定要删除接口 "${interfaceItem.method} ${interfaceItem.path}" 吗？若已生成用例需先删除用例。`,
+    positiveText: '确定',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      try {
+        await api.deleteApiInterface(interfaceItem.interface_id)
+        message.success('删除成功')
+        refreshInterfaces()
+        loadStatistics()
+      } catch (error) {
+        // 拦截器已弹出后端 msg（如「该接口存在 N 个关联用例...」），无需重复提示
+        console.warn('删除接口失败:', error)
       }
     }
   })

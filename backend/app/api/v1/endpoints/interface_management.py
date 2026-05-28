@@ -410,21 +410,48 @@ async def delete_document(doc_id: str):
         document = await ApiDocument.filter(doc_id=doc_id, is_deleted=False).first()
         if not document:
             raise HTTPException(status_code=404, detail="文档不存在")
-        
+
         # 软删除文档
         document.is_deleted = True
         await document.save()
-        
+
         # 软删除关联的接口
         await ApiInterface.filter(document=document).update(is_active=False)
-        
+
         return {"code": 200, "msg": "文档删除成功"}
-        
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"删除文档失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"删除文档失败: {str(e)}")
+
+
+@router.delete("/interfaces/{interface_id}")
+async def delete_interface(interface_id: str):
+    """删除单个接口（软删除）。若存在关联的激活用例则拒绝删除。"""
+    try:
+        interface = await ApiInterface.filter(interface_id=interface_id, is_active=True).first()
+        if not interface:
+            return {"code": 404, "success": False, "msg": "接口不存在或已删除"}
+
+        from app.models.api_automation import TestCase
+        active_case_count = await TestCase.filter(endpoint=interface, is_active=True).count()
+        if active_case_count > 0:
+            return {
+                "code": 400,
+                "success": False,
+                "msg": f"该接口存在 {active_case_count} 个关联用例，请先删除用例后再删除接口",
+            }
+
+        interface.is_active = False
+        await interface.save()
+
+        return {"code": 200, "success": True, "msg": "接口删除成功"}
+
+    except Exception as e:
+        logger.error(f"删除接口失败: {str(e)}")
+        return {"code": 500, "success": False, "msg": f"删除接口失败: {str(e)}"}
 
 
 @router.get("/statistics", response_model=StatisticsResponse)

@@ -24,10 +24,10 @@ from app.core.types import AgentTypes, TopicTypes
 from app.settings.config import settings
 from app.models.api_automation import (
     ApiDocument, ApiInterface, ApiParameter as DbApiParameter,
-    ApiResponse as DbApiResponse, TestScript
+    ApiResponse as DbApiResponse, TestScript, TestCase
 )
-from app.core.enums import SessionStatus
-from .schemas import DocumentParseOutput, ParsedEndpoint, ApiParameter, ApiResponse, ScriptPersistenceInput
+from app.core.enums import SessionStatus, TestType, TestLevel, Priority
+from .schemas import DocumentParseOutput, ParsedEndpoint, ApiParameter, ApiResponse, ScriptPersistenceInput, GeneratedTestCase, TestCaseType
 
 
 class ApiDataPersistenceInput:
@@ -193,6 +193,10 @@ class ApiDataPersistenceAgent(BaseApiAutomationAgent):
 
                 # 4. 更新接口的脚本统计信息
                 await self._update_interface_script_stats(interface, stored_scripts, conn)
+
+                # 5. 落库 TestCase（用例维度），用于"用例管理"页面
+                if message.test_cases:
+                    await self._store_test_cases(message, document, conn)
 
             # 更新统计指标
             processing_time = (datetime.now() - start_time).total_seconds()
@@ -465,6 +469,150 @@ class ApiDataPersistenceAgent(BaseApiAutomationAgent):
         except Exception as e:
             logger.error(f"存储响应信息失败: {str(e)}")
             raise
+
+    @staticmethod
+    def _derive_case_display_name(test_case: GeneratedTestCase, endpoint: ParsedEndpoint) -> str:
+        """计算用例展示名：优先用 endpoint.description，按 test_type 加后缀区分。"""
+        base = ""
+        if endpoint:
+            base = (endpoint.description or "").strip() or (endpoint.summary or "").strip()
+            if not base:
+                method_str = endpoint.method.value if hasattr(endpoint.method, "value") else str(endpoint.method)
+                base = f"{method_str} {endpoint.path}"
+        if not base:
+            base = (test_case.test_name or "").strip() or "未命名用例"
+
+        type_value = test_case.test_type.value if hasattr(test_case.test_type, "value") else str(test_case.test_type)
+        suffix_map = {
+            "positive":    "",
+            "negative":    "（异常）",
+            "boundary":    "（边界）",
+            "security":    "（安全）",
+            "performance": "（性能）",
+        }
+        suffix = suffix_map.get(type_value, "")
+        return f"{base}{suffix}"
+
+    @staticmethod
+    def _map_test_type(tc_type) -> "TestType":
+        """schema 的 TestCaseType -> 数据库 TestType"""
+        value = tc_type.value if hasattr(tc_type, "value") else str(tc_type)
+        mapping = {
+            "performance": TestType.PERFORMANCE,
+            "security":    TestType.SECURITY,
+        }
+        return mapping.get(value, TestType.FUNCTIONAL)
+
+    @staticmethod
+    def _map_priority(p) -> "Priority":
+        """schema 的 int 优先级 -> 数据库 Priority 枚举"""
+        if isinstance(p, int):
+            return {1: Priority.P0, 2: Priority.P1, 3: Priority.P2, 4: Priority.P3}.get(p, Priority.P2)
+        return Priority.P2
+
+    async def _store_test_cases(
+        self,
+        message: ScriptPersistenceInput,
+        document: ApiDocument,
+        conn,
+    ) -> None:
+        """将本次生成的测试用例落库（TestCase 表），按 endpoint+class::method 维度判重。"""
+        try:
+            ep_by_id = {ep.endpoint_id: ep for ep in (message.endpoints or [])}
+
+            # 汇总所有脚本的 case_method_map（key: test_case_id -> {class_name, method_name, file_path}）
+            case_method_full: Dict[str, Dict[str, str]] = {}
+            for script in (message.scripts or []):
+                file_path = script.file_path or ""
+                for tc_id, mp in (script.case_method_map or {}).items():
+                    full = {
+                        "class_name": mp.get("class_name") or "",
+                        "method_name": mp.get("method_name") or "",
+                        "file_path": file_path,
+                    }
+                    case_method_full[tc_id] = full
+
+            for tc in (message.test_cases or []):
+                endpoint = ep_by_id.get(tc.endpoint_id)
+                if not endpoint:
+                    logger.debug(f"用例 {tc.test_case_id} 找不到对应 endpoint，跳过落库")
+                    continue
+
+                # 找到对应的 ApiInterface 行（interface_id == endpoint.endpoint_id）
+                api_interface = await ApiInterface.filter(
+                    interface_id=endpoint.endpoint_id,
+                    document=document,
+                ).using_db(conn).first()
+                if not api_interface:
+                    logger.debug(f"用例 {tc.test_case_id} 找不到对应 ApiInterface(interface_id={endpoint.endpoint_id})，跳过")
+                    continue
+
+                mp = case_method_full.get(tc.test_case_id, {})
+                class_name = mp.get("class_name") or ""
+                method_name = mp.get("method_name") or ""
+                script_file_path = mp.get("file_path") or ""
+
+                display_name = self._derive_case_display_name(tc, endpoint)
+                description = (tc.description or endpoint.description or "").strip()
+                test_type_db = self._map_test_type(tc.test_type)
+                priority_db = self._map_priority(tc.priority)
+
+                # 判重：document + endpoint(interface) + class_name + method_name
+                existing = None
+                if class_name and method_name:
+                    existing = await TestCase.filter(
+                        document=document,
+                        endpoint=api_interface,
+                        class_name=class_name,
+                        method_name=method_name,
+                    ).using_db(conn).first()
+
+                if existing:
+                    existing.name = display_name
+                    existing.description = description
+                    existing.test_type = test_type_db
+                    existing.test_level = TestLevel.INTEGRATION
+                    existing.priority = priority_db
+                    existing.test_data = [td.model_dump() if hasattr(td, "model_dump") else td for td in (tc.test_data or [])]
+                    existing.assertions = [a.model_dump() if hasattr(a, "model_dump") else a for a in (tc.assertions or [])]
+                    existing.tags = list(getattr(tc, "tags", []) or [])
+                    existing.script_file_path = script_file_path or existing.script_file_path
+                    existing.generation_session_id = message.session_id
+                    existing.is_active = True
+                    await existing.save(using_db=conn)
+                    logger.debug(f"更新 TestCase: {display_name} ({class_name}::{method_name})")
+                else:
+                    await TestCase.create(
+                        test_id=tc.test_case_id,
+                        document=document,
+                        endpoint=api_interface,
+                        name=display_name,
+                        description=description,
+                        test_type=test_type_db,
+                        test_level=TestLevel.INTEGRATION,
+                        priority=priority_db,
+                        test_data=[td.model_dump() if hasattr(td, "model_dump") else td for td in (tc.test_data or [])],
+                        assertions=[a.model_dump() if hasattr(a, "model_dump") else a for a in (tc.assertions or [])],
+                        setup_steps=[],
+                        teardown_steps=[],
+                        dependencies=[],
+                        tags=list(getattr(tc, "tags", []) or []),
+                        timeout=30,
+                        retry_count=0,
+                        class_name=class_name or None,
+                        method_name=method_name or None,
+                        script_file_path=script_file_path or None,
+                        generated_by="AI",
+                        generation_session_id=message.session_id,
+                        is_active=True,
+                        using_db=conn,
+                    )
+                    logger.debug(f"创建 TestCase: {display_name} ({class_name}::{method_name})")
+
+            logger.info(f"TestCase 落库完成: 共处理 {len(message.test_cases or [])} 个用例")
+        except Exception as e:
+            logger.error(f"TestCase 落库失败: {str(e)}", exc_info=True)
+            # 不抛异常，避免影响脚本落库主流程
 
     async def _update_existing_script(
         self,

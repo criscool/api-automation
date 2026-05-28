@@ -194,3 +194,5 @@ backend/api-docs/
 backend/mvp演示计划.md
 backend/接口自动化测试平台.md
 backend/api-capture-backend-requirement.md
+*.bak.*
+*.bak1

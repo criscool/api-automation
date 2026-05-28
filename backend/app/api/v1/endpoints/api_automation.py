@@ -644,6 +644,9 @@ async def get_parse_status(session_id: str):
             response_data["msg"] = f"未知状态: {status}"
             response_data["data"]["progress"] = 0
 
+        # 把外层 msg 同步进 data.message，方便前端解构 response.data.message
+        response_data["data"]["message"] = response_data.get("msg", "")
+
         return response_data
 
     except Exception as e:
@@ -1235,9 +1238,10 @@ async def get_analysis_result(
         }
 
     elapsed = (datetime.now() - datetime.fromisoformat(task["started_at"])).total_seconds()
-    if elapsed > 300:
+    # 超时阈值放宽到 20 分钟，适应大文档（多接口分批生成 + LLM 调用慢）
+    if elapsed > 1200:
         task["status"] = "failed"
-        task["error"] = "分析超时（5分钟）"
+        task["error"] = "分析超时（20分钟）"
         return {
             "code": 200,
             "success": True,

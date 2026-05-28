@@ -939,9 +939,28 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
         try:
             self.testcases_dir.mkdir(parents=True, exist_ok=True)
 
+            logger.info(f"开始保存生成文件，脚本数: {len(output.scripts)}, "
+                        f"目标目录: {self.testcases_dir}")
+
+            if not output.scripts:
+                logger.warning("output.scripts 为空，没有任何文件需要保存")
+                return
+
             for script in output.scripts:
-                script_path = self.output_dir / script.file_path
+                # 文件统一保存到 testcases/ 目录
+                # script.file_path 可能是 "test_alarm.py" 或 "testcases/test_alarm.py"
+                file_name = Path(script.file_path).name
+                script_path = self.testcases_dir / file_name
                 script_path.parent.mkdir(parents=True, exist_ok=True)
+
+                logger.info(f"保存脚本: name={script.script_name}, "
+                            f"file_path={script.file_path}, "
+                            f"实际写入={script_path}, "
+                            f"内容长度={len(script.script_content)}")
+
+                if not script.script_content:
+                    logger.warning(f"脚本内容为空，跳过: {script_path}")
+                    continue
 
                 if script_path.exists():
                     try:
@@ -959,7 +978,7 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
             logger.info(f"测试脚本已保存到: {self.testcases_dir}")
 
         except Exception as e:
-            logger.error(f"保存生成文件失败: {str(e)}")
+            logger.error(f"保存生成文件失败: {str(e)}", exc_info=True)
 
     # =========================================================================
     # 持久化
@@ -981,11 +1000,25 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
                 and s.script_name != "conftest.py"
             ]
 
+            # 反向解析每个脚本的 case -> (class_name, method_name) 映射
+            for script in persisted_scripts:
+                try:
+                    script.case_method_map = self._extract_case_method_map(
+                        script.script_content,
+                        [tc for tc in message.test_cases if tc.test_case_id in (script.test_case_ids or [])] or message.test_cases,
+                        message.endpoints,
+                    )
+                except Exception as map_err:
+                    logger.warning(f"提取 case_method_map 失败 ({script.script_name}): {map_err}")
+                    script.case_method_map = {}
+
             persistence_input = ScriptPersistenceInput(
                 session_id=output.session_id,
                 document_id=output.document_id,
                 interface_id=message.interface_id,
                 scripts=persisted_scripts,
+                test_cases=message.test_cases,
+                endpoints=message.endpoints,
                 config_files=output.config_files,
                 requirements_txt=output.requirements_txt,
                 readme_content=output.readme_content,
@@ -1002,6 +1035,109 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
 
         except Exception as e:
             logger.error(f"发送脚本到数据持久化智能体失败: {str(e)}")
+
+    def _extract_case_method_map(
+        self,
+        script_content: str,
+        test_cases: List[GeneratedTestCase],
+        endpoints: List[ParsedEndpoint],
+    ) -> Dict[str, Dict[str, str]]:
+        """从生成的脚本源码反向解析 test_case_id -> {class_name, method_name}。
+
+        策略：
+        1. AST 遍历 ClassDef -> FunctionDef，收集 (class_name, method_name, method_source)
+        2. 按 endpoint 的 method+path 在 method_source 中做子串匹配，确定 method 属于哪个 endpoint
+        3. 同 endpoint 下的 test_cases 按出现顺序消费 endpoint 对应的 methods
+        """
+        import ast
+
+        if not script_content:
+            return {}
+
+        try:
+            tree = ast.parse(script_content)
+        except SyntaxError as e:
+            logger.warning(f"AST 解析失败，case_method_map 为空: {e}")
+            return {}
+
+        # 收集所有 (class_name, method_name, source_segment) 按出现顺序
+        all_methods: List[Tuple[str, str, str]] = []
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef):
+                for sub in node.body:
+                    if isinstance(sub, ast.FunctionDef) and sub.name.startswith("test_"):
+                        try:
+                            segment = ast.get_source_segment(script_content, sub) or ""
+                        except Exception:
+                            segment = ""
+                        all_methods.append((node.name, sub.name, segment))
+
+        if not all_methods:
+            return {}
+
+        ep_by_id = {ep.endpoint_id: ep for ep in endpoints}
+
+        # 提取 method body 内最后一个 api_client.<verb>(URL, ...) 的 URL 字面量。
+        # LLM 生成链式调用 method 时 setup（取 key/guid）放前面、被测主接口放最后，
+        # 单步 method 也只有一个调用，逻辑一致。
+        _last_url_pattern = re.compile(r'api_client\.\w+\s*\(\s*["\']([^"\']+)["\']')
+
+        def extract_test_target_url(source: str) -> Optional[str]:
+            matches = _last_url_pattern.findall(source)
+            return matches[-1] if matches else None
+
+        # endpoint -> 匹配该 endpoint 的 method 索引列表（保持原顺序）
+        def endpoint_matches_method(ep: ParsedEndpoint, source: str) -> bool:
+            method_lower = ep.method.value.lower() if hasattr(ep.method, "value") else str(ep.method).lower()
+            path = ep.path or ""
+            if not path:
+                return False
+            target_url = extract_test_target_url(source)
+            if target_url:
+                # 严格相等优先（避免 /getInfo 误匹配 /getassetinfo 类邻近路径）
+                if path == target_url:
+                    return f".{method_lower}(" in source
+                # 含 {var} 占位符时，前缀必须出现在 target_url 开头
+                stripped = re.sub(r"\{[^}]+\}.*$", "", path).rstrip("/")
+                if stripped and target_url.startswith(stripped) and f".{method_lower}(" in source:
+                    return True
+                return False
+            # fallback：method 内没有 api_client 调用（罕见），退回旧子串策略
+            if path in source:
+                return True
+            stripped = re.sub(r"\{[^}]+\}.*$", "", path).rstrip("/")
+            if stripped and stripped in source and f".{method_lower}(" in source:
+                return True
+            return False
+
+        ep_method_indices: Dict[str, List[int]] = {}
+        for idx, (_, _, src) in enumerate(all_methods):
+            for ep in endpoints:
+                if endpoint_matches_method(ep, src):
+                    ep_method_indices.setdefault(ep.endpoint_id, []).append(idx)
+                    break  # 一个 method 只归属第一个匹配的 endpoint
+
+        case_method_map: Dict[str, Dict[str, str]] = {}
+        # 按 endpoint 分组 test_cases，按顺序分配
+        from collections import defaultdict
+        cases_by_ep: Dict[str, List[GeneratedTestCase]] = defaultdict(list)
+        for tc in test_cases:
+            cases_by_ep[tc.endpoint_id].append(tc)
+
+        for ep_id, ep_cases in cases_by_ep.items():
+            method_idxs = ep_method_indices.get(ep_id, [])
+            for i, tc in enumerate(ep_cases):
+                if i < len(method_idxs):
+                    cls, mth, _ = all_methods[method_idxs[i]]
+                else:
+                    # 用例数 > 实际生成的 method 数：复用同 endpoint 的第一个 method
+                    if method_idxs:
+                        cls, mth, _ = all_methods[method_idxs[0]]
+                    else:
+                        continue
+                case_method_map[tc.test_case_id] = {"class_name": cls, "method_name": mth}
+
+        return case_method_map
 
     # =========================================================================
     # 辅助方法
