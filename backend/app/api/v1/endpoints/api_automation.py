@@ -421,6 +421,23 @@ async def upload_api_document(
         mime_type, _ = mimetypes.guess_type(file.filename)
         category, category_config = get_api_doc_category(file.filename)
 
+        # 立即创建 ApiDocument 记录，确保后续 analyze-endpoints 能查到
+        from app.models.api_automation import ApiDocument as DbApiDocument
+        try:
+            await DbApiDocument.create(
+                doc_id=document_id,
+                session_id=session_id,
+                file_name=file.filename,
+                file_path=str(file_path),
+                file_size=file_size,
+                doc_format=doc_format,
+                api_info={},
+                parse_status="created",
+            )
+            logger.info(f"ApiDocument 已创建: {document_id}")
+        except Exception as e:
+            logger.warning(f"创建 ApiDocument 失败（可能已存在）: {e}")
+
         # 记录会话信息
         active_sessions[session_id] = {
             "session_id": session_id,
@@ -635,7 +652,29 @@ async def get_parse_status(session_id: str):
         elif status == "completed":
             response_data["msg"] = "文档解析完成"
             response_data["data"]["progress"] = 100
-            response_data["data"]["result"] = session_info.get("result")
+            # 从 DB 重新加载最新结果（编排器 process_api_document 返回时 agent 可能还没跑完）
+            result = session_info.get("result") or {}
+            try:
+                from app.models.api_automation import ApiDocument as DbApiDocument, ApiInterface as DbApiInterface
+                doc = await DbApiDocument.filter(session_id=session_id).order_by("-created_at").first()
+                if doc:
+                    interfaces = await DbApiInterface.filter(document=doc, is_active=True).all()
+                    endpoints_data = []
+                    for itf in interfaces:
+                        endpoints_data.append({
+                            "endpoint_id": itf.interface_id,
+                            "method": itf.method.value if itf.method else "GET",
+                            "path": itf.path,
+                            "summary": itf.summary or itf.name,
+                            "authRequired": itf.auth_required,
+                        })
+                    result["endpoints"] = endpoints_data
+                    result["endpointsCount"] = len(endpoints_data)
+                    # 更新缓存，后续轮询直接返回最新值
+                    session_info["result"] = result
+            except Exception as refresh_err:
+                logger.warning(f"刷新解析结果失败: {refresh_err}")
+            response_data["data"]["result"] = result
         elif status == "failed":
             response_data["msg"] = f"解析失败: {session_info.get('error', '未知错误')}"
             response_data["data"]["progress"] = 0
@@ -1389,4 +1428,319 @@ async def get_generation_result(
             "coverageScore": coverage_score,
             "generatedScripts": generated_scripts,
         },
+    }
+
+
+# ====================================================================
+# 依赖 JSON 导入 — 旁路 ApiAnalyzer/TestCaseGenerator，直接走 scenario 分支
+# ====================================================================
+
+dependency_import_tasks: Dict[str, Dict[str, Any]] = {}
+
+
+async def _persist_dependency_import_records(
+    *,
+    doc_id: str,
+    session_id: str,
+    file_name: str,
+    file_path: str,
+    file_size: int,
+    api_info,
+    endpoints,
+) -> tuple:
+    """为依赖 JSON 导入创建 ApiDocument 和 ApiInterface 记录。
+
+    返回 (ApiDocument 实例, ApiInterface 列表)。
+    """
+    from app.models.api_automation import (
+        ApiDocument as DbApiDocument,
+        ApiInterface as DbApiInterface,
+    )
+    from app.core.enums import SessionStatus
+
+    document = await DbApiDocument.create(
+        doc_id=doc_id,
+        session_id=session_id,
+        file_name=file_name,
+        file_path=file_path,
+        file_size=file_size,
+        file_hash=None,
+        doc_format="dependency-doc",
+        doc_version="1.0",
+        api_info={
+            "title": api_info.title,
+            "version": api_info.version,
+            "description": api_info.description,
+            "base_url": api_info.base_url,
+        },
+        endpoints_count=len(endpoints),
+        parse_status=SessionStatus.COMPLETED,
+        confidence_score=1.0,
+    )
+
+    interfaces = []
+    for ep in endpoints:
+        iface = await DbApiInterface.create(
+            interface_id=ep.endpoint_id,
+            document=document,
+            endpoint_id=ep.endpoint_id,
+            name=ep.summary or ep.path,
+            path=ep.path,
+            method=ep.method,
+            summary=ep.summary or "",
+            description=ep.description or "",
+            api_title=api_info.title,
+            api_version=api_info.version,
+            base_url=api_info.base_url,
+            tags=ep.tags or [],
+            category=ep.category or "",
+            auth_required=ep.auth_required,
+            confidence_score=1.0,
+        )
+        interfaces.append(iface)
+
+    return document, interfaces
+
+
+@router.post("/dependency-import", summary="导入依赖 JSON 触发 scenario 脚本生成")
+async def import_dependency_doc(file: UploadFile = File(...)):
+    """接收预分析的依赖 JSON（ai-testmind 等工具产出），跳过 ApiAnalyzer/
+    TestCaseGenerator 两个智能体，直接走 ScriptGeneratorAgent 的 scenario 分支
+    模板渲染出可执行 pytest 脚本。
+    """
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="未选择文件")
+    if not file.filename.lower().endswith(".json"):
+        raise HTTPException(status_code=400, detail="仅支持 .json 文件")
+
+    raw = await file.read()
+    file_size = len(raw)
+
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise HTTPException(status_code=400, detail=f"JSON 解析失败: {e}")
+
+    if not isinstance(doc, dict) or not doc.get("chains"):
+        raise HTTPException(
+            status_code=400,
+            detail="不是有效的依赖 JSON（缺少 chains 字段）",
+        )
+
+    from app.services.api_automation.dependency_doc_converter import DependencyDocConverter
+
+    try:
+        converter = DependencyDocConverter(doc)
+    except (TypeError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"依赖 JSON 结构无效: {e}")
+
+    api_info = converter.to_api_info()
+    endpoints = converter.to_endpoints()
+    test_cases = converter.to_test_cases()
+    scenarios = converter.to_scenarios()
+    dependencies = converter.to_dependencies()
+
+    if not scenarios:
+        raise HTTPException(status_code=400, detail="未从依赖 JSON 解析出任何 scenario")
+    if not endpoints:
+        raise HTTPException(status_code=400, detail="未从依赖 JSON 解析出任何端点")
+
+    session_id = str(uuid.uuid4())
+    doc_id = str(uuid.uuid4())
+    task_id = str(uuid.uuid4())
+
+    upload_dir = Path("./uploads")
+    upload_dir.mkdir(exist_ok=True)
+    stored_name = f"{session_id}_{file.filename}"
+    file_path = upload_dir / stored_name
+    file_path.write_bytes(raw)
+
+    try:
+        document, _interfaces = await _persist_dependency_import_records(
+            doc_id=doc_id,
+            session_id=session_id,
+            file_name=file.filename,
+            file_path=str(file_path),
+            file_size=file_size,
+            api_info=api_info,
+            endpoints=endpoints,
+        )
+    except Exception as e:
+        logger.error(f"依赖 JSON 落库失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"落库失败: {e}")
+
+    primary_interface_id = (
+        scenarios[0].primary_endpoint_id
+        or (endpoints[0].endpoint_id if endpoints else None)
+    )
+    if not primary_interface_id:
+        raise HTTPException(status_code=400, detail="无法确定主接口 ID")
+
+    dependency_import_tasks[task_id] = {
+        "status": "processing",
+        "doc_id": doc_id,
+        "document_pk": document.id,
+        "session_id": session_id,
+        "scenarios_count": len(scenarios),
+        "endpoints_count": len(endpoints),
+        "test_cases_count": len(test_cases),
+        "started_at": datetime.now().isoformat(),
+    }
+
+    try:
+        orch = await get_orchestrator_async()
+        if orch is None or not hasattr(orch, "runtime") or orch.runtime is None:
+            raise RuntimeError("编排器或 runtime 未初始化")
+
+        from autogen_core import TopicId
+        from app.agents.api_automation.schemas import ScriptGenerationInput
+
+        script_input = ScriptGenerationInput(
+            session_id=session_id,
+            document_id=doc_id,
+            interface_id=primary_interface_id,
+            api_info=api_info,
+            endpoints=endpoints,
+            test_cases=test_cases,
+            dependencies=dependencies,
+            scenarios=scenarios,
+            generation_options={"source": "dependency-doc"},
+        )
+
+        await orch.runtime.publish_message(
+            script_input,
+            topic_id=TopicId(
+                type=TopicTypes.TEST_SCRIPT_GENERATOR.value,
+                source="dependency_import",
+            ),
+        )
+
+        logger.info(
+            f"已触发 scenario 脚本生成: task_id={task_id}, doc_id={doc_id}, "
+            f"scenarios={len(scenarios)}, endpoints={len(endpoints)}"
+        )
+
+    except Exception as e:
+        logger.error(f"触发 scenario 脚本生成失败: {e}", exc_info=True)
+        dependency_import_tasks[task_id]["status"] = "failed"
+        dependency_import_tasks[task_id]["error"] = str(e)
+        raise HTTPException(status_code=500, detail=f"触发脚本生成失败: {e}")
+
+    return {
+        "code": 200,
+        "success": True,
+        "msg": "依赖 JSON 已导入，scenario 脚本生成中",
+        "data": {
+            "taskId": task_id,
+            "sessionId": session_id,
+            "docId": doc_id,
+            "fileName": file.filename,
+            "scenariosCount": len(scenarios),
+            "endpointsCount": len(endpoints),
+            "testCasesCount": len(test_cases),
+            "scriptsExpected": len(scenarios),
+        },
+    }
+
+
+@router.get("/dependency-import-result", summary="获取依赖 JSON 导入结果")
+async def get_dependency_import_result(
+    taskId: str = Query(...),
+    docId: str = Query(None),
+):
+    """轮询依赖 JSON 导入的 scenario 脚本生成结果。
+
+    与 `analysis-result` / `generation-result` 同样的兜底逻辑：内存任务丢失
+    （后端重启）时，若前端带了 `docId` 则按文档维度兜底查询。
+    """
+    task = dependency_import_tasks.get(taskId)
+
+    if not task and docId:
+        document_fallback = await ApiDocument.filter(
+            Q(doc_id=docId) | Q(session_id=docId)
+        ).first()
+        if not document_fallback:
+            raise HTTPException(status_code=404, detail="文档不存在")
+        task = {
+            "status": "processing",
+            "doc_id": docId,
+            "document_pk": document_fallback.id,
+            "session_id": document_fallback.session_id,
+            "started_at": datetime.now().isoformat(),
+            "recovered": True,
+        }
+        dependency_import_tasks[taskId] = task
+
+    if not task:
+        raise HTTPException(status_code=404, detail="导入任务不存在")
+
+    if task["status"] == "failed":
+        return {
+            "code": 200,
+            "success": True,
+            "msg": task.get("error", "导入失败"),
+            "data": {"status": "failed", "taskId": taskId},
+        }
+
+    document = await ApiDocument.filter(id=task["document_pk"]).first()
+    if not document:
+        return {
+            "code": 200,
+            "success": True,
+            "msg": "文档不存在",
+            "data": {"status": "failed", "taskId": taskId},
+        }
+
+    interfaces = await ApiInterface.filter(document=document, is_active=True).all()
+    interface_ids = [i.id for i in interfaces]
+    script_count = 0
+    if interface_ids:
+        script_count = await TestScript.filter(
+            interface_id__in=interface_ids, is_active=True
+        ).count()
+
+    if script_count > 0:
+        task["status"] = "completed"
+        scripts = await TestScript.filter(
+            interface_id__in=interface_ids, is_active=True
+        ).all()
+        return {
+            "code": 200,
+            "success": True,
+            "msg": "OK",
+            "data": {
+                "status": "completed",
+                "taskId": taskId,
+                "docId": document.doc_id,
+                "scriptsCount": script_count,
+                "scripts": [
+                    {
+                        "id": s.script_id,
+                        "fileName": s.file_name,
+                        "name": s.name,
+                        "framework": s.framework,
+                        "filePath": s.file_path,
+                    }
+                    for s in scripts
+                ],
+            },
+        }
+
+    elapsed = (datetime.now() - datetime.fromisoformat(task["started_at"])).total_seconds()
+    # scenario 模板渲染是同步纯函数，正常应在 30s 内完成；放宽到 5 分钟兜底
+    if elapsed > 300:
+        task["status"] = "failed"
+        task["error"] = "scenario 脚本生成超时（5分钟）"
+        return {
+            "code": 200,
+            "success": True,
+            "msg": "导入超时",
+            "data": {"status": "failed", "taskId": taskId},
+        }
+
+    return {
+        "code": 200,
+        "success": True,
+        "msg": "生成进行中",
+        "data": {"status": "processing", "taskId": taskId},
     }

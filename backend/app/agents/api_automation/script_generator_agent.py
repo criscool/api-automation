@@ -26,7 +26,8 @@ from app.core.types import AgentTypes, TopicTypes
 from .schemas import (
     ScriptGenerationInput, ScriptGenerationOutput, GeneratedScript,
     GeneratedTestCase, ParsedEndpoint, TestCaseType, AgentPrompts,
-    EndpointDependency, DependencyType
+    EndpointDependency, DependencyType,
+    ScenarioTestCase, ScenarioStepSpec
 )
 from .script_merger import merge_pytest_scripts
 
@@ -115,18 +116,31 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
             )
             api_module_info = self._generate_api_module(message.endpoints)
 
-            # 2. 使用 LLM 智能生成测试脚本
-            await self._log_operation_progress(
-                message.session_id, "script_generation", "智能生成测试脚本"
-            )
-            generation_result = await self._intelligent_generate_scripts(
-                message.api_info,
-                message.endpoints,
-                message.test_cases,
-                getattr(message, 'dependencies', []),
-                message.execution_groups,
-                message.generation_options
-            )
+            # 2. 选择生成路径：
+            #    - 有 scenarios（来自依赖 JSON 旁路）→ 走模板渲染，不调 LLM
+            #    - 否则走原流水线（LLM + fallback）
+            scenarios = getattr(message, "scenarios", None) or []
+            if scenarios:
+                await self._log_operation_progress(
+                    message.session_id, "script_generation",
+                    "scenario 模板渲染（跳过 LLM）",
+                    {"scenarios_count": len(scenarios)}
+                )
+                generation_result = self._build_scenario_scripts(
+                    scenarios, message.endpoints, message.test_cases
+                )
+            else:
+                await self._log_operation_progress(
+                    message.session_id, "script_generation", "智能生成测试脚本"
+                )
+                generation_result = await self._intelligent_generate_scripts(
+                    message.api_info,
+                    message.endpoints,
+                    message.test_cases,
+                    getattr(message, 'dependencies', []),
+                    message.execution_groups,
+                    message.generation_options
+                )
 
             # 3. 构建脚本对象
             await self._log_operation_progress(
@@ -267,6 +281,176 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
             "functions": functions,
             "file_path": str(file_path)
         }
+
+    # =========================================================================
+    # Scenario 模板渲染（依赖 JSON 旁路：不调 LLM）
+    # =========================================================================
+
+    def _build_scenario_scripts(
+        self,
+        scenarios: List[ScenarioTestCase],
+        endpoints: List[ParsedEndpoint],
+        test_cases: List[GeneratedTestCase],
+    ) -> Dict[str, Any]:
+        """每个 scenario → 一个 testcases/test_scenario_<slug>.py 脚本。"""
+        scripts: List[Dict[str, Any]] = []
+        ep_by_id = {ep.endpoint_id: ep for ep in endpoints}
+        for sc in scenarios:
+            if not sc.steps:
+                logger.warning(f"scenario 无步骤，跳过: {sc.name}")
+                continue
+            script_name, content = self._render_scenario_script(sc, ep_by_id)
+            if not content:
+                continue
+            tc_ids = [s.related_test_case_id for s in sc.steps if s.related_test_case_id]
+            scripts.append({
+                "script_name": script_name,
+                "file_path": f"testcases/{script_name}",
+                "script_content": content,
+                "test_case_ids": tc_ids,
+                "framework": "pytest",
+                "dependencies": ["pytest"],
+                "execution_order": 1,
+            })
+        return {
+            "scripts": scripts,
+            "confidence_score": 1.0,
+            "generation_method": "scenario_template",
+        }
+
+    def _render_scenario_script(
+        self,
+        sc: ScenarioTestCase,
+        ep_by_id: Dict[str, ParsedEndpoint],
+    ) -> Tuple[str, str]:
+        """渲染单个 scenario 脚本：一个 class + 一个 test_chain 方法。
+        返回 (script_name, content, class_name)。"""
+        import pprint
+
+        slug = self._sanitize_name(sc.name)
+        script_name = f"test_scenario_{slug}.py"
+        class_name = "TestScenario" + "".join(w.capitalize() for w in slug.split("_") if w)
+        if not class_name or class_name == "TestScenario":
+            class_name = "TestScenarioChain"
+
+        # marker：取 module slug（如 asset_management），跳过 "scenario" 字符串
+        marker_tag = next(
+            (t for t in sc.tags if t and t != "scenario"),
+            None,
+        )
+        marker_tag = self._sanitize_name(marker_tag) if marker_tag else "scenario"
+
+        def lit(obj: Any) -> str:
+            """把 Python 对象格式化为可嵌入源码的字面量（处理中文 + 缩进）。"""
+            return pprint.pformat(obj, indent=4, width=100, sort_dicts=False)
+
+        lines: List[str] = []
+        # ---- 文件头 ----
+        lines.append(f'"""{sc.name}（场景测试，自动生成）')
+        if sc.description:
+            lines.append("")
+            lines.append(sc.description)
+        lines.append('"""')
+        lines.append("import pytest")
+        lines.append("")
+        lines.append("from automation.core.utils.scenario_helpers import (")
+        lines.append("    apply_data_in,")
+        lines.append("    extract_data_out,")
+        lines.append("    render_path,")
+        lines.append("    run_assert,")
+        lines.append(")")
+        lines.append("")
+        lines.append(f"pytestmark = [pytest.mark.{marker_tag}, pytest.mark.scenario]")
+        lines.append("")
+        lines.append("")
+        lines.append(f"class {class_name}:")
+        lines.append(f'    """{sc.name}"""')
+        lines.append("")
+        lines.append("    def test_chain(self, api_client):")
+        method_doc = sc.description or sc.name
+        lines.append(f'        """{method_doc}"""')
+        lines.append("        ctx: dict = {}")
+        lines.append("")
+
+        for step in sc.steps:
+            method_lower = step.method.value.lower()
+            purpose = (step.purpose or "").replace("\n", " ")[:60]
+            lines.append(f"        # ============ step {step.step}: {purpose} ============")
+
+            body_lit = lit(step.body or {})
+            query_lit = lit(step.query or {})
+            # pathParams 由 dataIn 提供运行时值时，剔除示例值（否则示例描述会被预先塞进 URL）
+            data_in_path_keys: set = {
+                k[len("pathParams."):].lstrip(":").strip("{}")
+                for k in (step.data_in or {}).keys()
+                if isinstance(k, str) and k.startswith("pathParams.")
+            }
+            filtered_path_params = {
+                k: v for k, v in (step.path_params or {}).items()
+                if str(k).lstrip(":").strip("{}") not in data_in_path_keys
+            }
+            path_params_lit = lit(filtered_path_params)
+            data_in_lit = lit(step.data_in or {})
+
+            # apply_data_in 返回 (body, query, path)
+            lines.append("        body, query, path = apply_data_in(")
+            lines.append(self._indent_literal(body_lit, 12) + ",")
+            lines.append(self._indent_literal(query_lit, 12) + ",")
+            lines.append(f"            render_path({step.path!r}, {path_params_lit}),")
+            lines.append(self._indent_literal(data_in_lit, 12) + ",")
+            lines.append("            ctx,")
+            lines.append("        )")
+
+            # HTTP 调用：GET / DELETE 走 query；POST/PUT/PATCH 同时支持 body+query
+            if method_lower == "get":
+                lines.append("        resp = api_client.get(path, params=query or None)")
+            elif method_lower == "delete":
+                lines.append("        resp = api_client.delete(path, params=query or None)")
+            elif method_lower in ("post", "put", "patch"):
+                lines.append(
+                    f"        resp = api_client.{method_lower}("
+                    f"path, json=body, params=query or None)"
+                )
+            else:
+                lines.append(
+                    f"        resp = api_client.request({method_lower.upper()!r}, "
+                    f"path, json=body, params=query or None)"
+                )
+
+            lines.append(
+                f"        assert resp.status_code == 200, "
+                f'f"step {step.step} status={{resp.status_code}}, body={{resp.text[:200]}}"'
+            )
+            lines.append("        resp_json = resp.json() if resp.content else {}")
+
+            if step.data_out:
+                data_out_lit = lit(step.data_out)
+                lines.append(
+                    f"        ctx[{step.step}] = {{'dataOut': extract_data_out("
+                    f"resp_json, {data_out_lit})}}"
+                )
+            else:
+                lines.append(f"        ctx.setdefault({step.step}, {{'dataOut': {{}}}})")
+
+            if step.assert_spec:
+                assert_lit = lit(step.assert_spec)
+                lines.append(
+                    f"        run_assert(resp_json, {assert_lit}, ctx, step_no={step.step})"
+                )
+
+            lines.append("")
+
+        content = "\n".join(lines) + "\n"
+        return script_name, content
+
+    @staticmethod
+    def _indent_literal(literal: str, indent: int) -> str:
+        """把多行字面量整体缩进 indent 个空格。第一行也加。"""
+        prefix = " " * indent
+        lines = literal.splitlines()
+        if not lines:
+            return prefix
+        return "\n".join(prefix + ln for ln in lines)
 
     # =========================================================================
     # LLM 智能生成
@@ -438,13 +622,15 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
         lines.append(f"class {class_name}:")
         lines.append("")
 
+        used_names: set = set()
+
         # 3.1 独立接口的测试方法
         for ep in independent_eps:
             ep_cases = [tc for tc in test_cases if tc.endpoint_id == ep.endpoint_id]
             if not ep_cases:
                 ep_cases = [self._create_default_test_case(ep)]
             for tc in ep_cases:
-                method_code = self._generate_test_method(tc, ep)
+                method_code = self._generate_test_method(tc, ep, used_names)
                 lines.append(method_code)
                 lines.append("")
 
@@ -476,7 +662,7 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
 
                 for tc in ep_cases:
                     method_code = self._generate_dependent_test_method(
-                        tc, ep, fixture_name
+                        tc, ep, fixture_name, used_names
                     )
                     lines.append(method_code)
                     lines.append("")
@@ -685,11 +871,12 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
     # =========================================================================
 
     def _generate_test_method(
-        self, test_case: GeneratedTestCase, endpoint: ParsedEndpoint
+        self, test_case: GeneratedTestCase, endpoint: ParsedEndpoint,
+        used_names: set = None,
     ) -> str:
         """生成独立接口的测试方法"""
-        method_name = self._sanitize_method_name(test_case.test_name)
         method_lower = endpoint.method.value.lower()
+        method_name = self._sanitize_method_name(test_case.test_name, method_lower, used_names)
         path = endpoint.path
         description = test_case.description or f"{endpoint.method.value} {path}"
         is_negative = test_case.test_type in (TestCaseType.NEGATIVE, TestCaseType.BOUNDARY, TestCaseType.SECURITY)
@@ -743,11 +930,11 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
 
     def _generate_dependent_test_method(
         self, test_case: GeneratedTestCase, endpoint: ParsedEndpoint,
-        fixture_name: str
+        fixture_name: str, used_names: set = None,
     ) -> str:
         """生成依赖链中的测试方法"""
-        method_name = self._sanitize_method_name(test_case.test_name)
         method_lower = endpoint.method.value.lower()
+        method_name = self._sanitize_method_name(test_case.test_name, method_lower, used_names)
         path = endpoint.path
         description = test_case.description or f"{endpoint.method.value} {path}"
 
@@ -1045,9 +1232,10 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
         """从生成的脚本源码反向解析 test_case_id -> {class_name, method_name}。
 
         策略：
-        1. AST 遍历 ClassDef -> FunctionDef，收集 (class_name, method_name, method_source)
-        2. 按 endpoint 的 method+path 在 method_source 中做子串匹配，确定 method 属于哪个 endpoint
-        3. 同 endpoint 下的 test_cases 按出现顺序消费 endpoint 对应的 methods
+        1. AST 遍历 ClassDef -> FunctionDef，收集 (class_name, method_name, FunctionDef)
+        2. 用 AST 提取每个方法体内所有 api_client.xxx(URL, ...) 调用的 URL（字面量 + 变量回溯）
+        3. 多候选打分匹配 endpoint：方法名命中 path tail 优先，最后一个 URL 作为 tie-break
+        4. 同 endpoint 下的 test_cases 按出现顺序消费 endpoint 对应的 methods
         """
         import ast
 
@@ -1060,65 +1248,116 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
             logger.warning(f"AST 解析失败，case_method_map 为空: {e}")
             return {}
 
-        # 收集所有 (class_name, method_name, source_segment) 按出现顺序
-        all_methods: List[Tuple[str, str, str]] = []
+        # 收集所有 (class_name, method_name, FunctionDef) 按出现顺序
+        all_methods: List[Tuple[str, str, ast.FunctionDef]] = []
         for node in tree.body:
             if isinstance(node, ast.ClassDef):
                 for sub in node.body:
                     if isinstance(sub, ast.FunctionDef) and sub.name.startswith("test_"):
-                        try:
-                            segment = ast.get_source_segment(script_content, sub) or ""
-                        except Exception:
-                            segment = ""
-                        all_methods.append((node.name, sub.name, segment))
+                        all_methods.append((node.name, sub.name, sub))
 
         if not all_methods:
             return {}
 
-        ep_by_id = {ep.endpoint_id: ep for ep in endpoints}
+        # AST 工具：从方法体提取所有 api_client.xxx(URL, ...) 调用的 URL 字面量
+        # 处理三种情况：直接字符串字面量、本地变量回溯（var = "URL"）、f-string 取字面部分
+        def extract_method_urls(func: ast.FunctionDef) -> List[str]:
+            var_to_str: Dict[str, str] = {}
+            for stmt in ast.walk(func):
+                if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                    tgt = stmt.targets[0]
+                    if (isinstance(tgt, ast.Name)
+                        and isinstance(stmt.value, ast.Constant)
+                        and isinstance(stmt.value.value, str)):
+                        var_to_str[tgt.id] = stmt.value.value
+            urls: List[str] = []
+            for stmt in ast.walk(func):
+                if (isinstance(stmt, ast.Call)
+                    and isinstance(stmt.func, ast.Attribute)
+                    and isinstance(stmt.func.value, ast.Name)
+                    and stmt.func.value.id == "api_client"
+                    and stmt.args):
+                    a0 = stmt.args[0]
+                    if isinstance(a0, ast.Constant) and isinstance(a0.value, str):
+                        urls.append(a0.value)
+                    elif isinstance(a0, ast.Name) and a0.id in var_to_str:
+                        urls.append(var_to_str[a0.id])
+                    elif isinstance(a0, ast.JoinedStr):
+                        # 取直到第一个变量插值之前的所有 Constant 段
+                        # 例如 f"/api/foo/{id}/bar" → "/api/foo/"，可与 ep.path "/api/foo/:id" 匹配
+                        parts_str: List[str] = []
+                        for p in a0.values:
+                            if isinstance(p, ast.Constant) and isinstance(p.value, str):
+                                parts_str.append(p.value)
+                            else:
+                                break
+                        s = "".join(parts_str)
+                        if s:
+                            urls.append(s)
+            return urls
 
-        # 提取 method body 内最后一个 api_client.<verb>(URL, ...) 的 URL 字面量。
-        # LLM 生成链式调用 method 时 setup（取 key/guid）放前面、被测主接口放最后，
-        # 单步 method 也只有一个调用，逻辑一致。
-        _last_url_pattern = re.compile(r'api_client\.\w+\s*\(\s*["\']([^"\']+)["\']')
+        # 路径参数正则：同时识别 OpenAPI 风格 `{xxx}` 和 Express/Flask 风格 `:xxx`
+        _path_var_re = re.compile(r"(\{[^}]+\}|:[A-Za-z_][A-Za-z0-9_]*).*$")
 
-        def extract_test_target_url(source: str) -> Optional[str]:
-            matches = _last_url_pattern.findall(source)
-            return matches[-1] if matches else None
+        def path_tail(p: str) -> str:
+            stripped = _path_var_re.sub("", p).rstrip("/")
+            parts = [seg for seg in stripped.split("/") if seg]
+            return parts[-1].lower() if parts else ""
 
-        # endpoint -> 匹配该 endpoint 的 method 索引列表（保持原顺序）
-        def endpoint_matches_method(ep: ParsedEndpoint, source: str) -> bool:
-            method_lower = ep.method.value.lower() if hasattr(ep.method, "value") else str(ep.method).lower()
-            path = ep.path or ""
-            if not path:
-                return False
-            target_url = extract_test_target_url(source)
-            if target_url:
-                # 严格相等优先（避免 /getInfo 误匹配 /getassetinfo 类邻近路径）
-                if path == target_url:
-                    return f".{method_lower}(" in source
-                # 含 {var} 占位符时，前缀必须出现在 target_url 开头
-                stripped = re.sub(r"\{[^}]+\}.*$", "", path).rstrip("/")
-                if stripped and target_url.startswith(stripped) and f".{method_lower}(" in source:
-                    return True
-                return False
-            # fallback：method 内没有 api_client 调用（罕见），退回旧子串策略
-            if path in source:
+        def url_matches_endpoint(url: str, ep: ParsedEndpoint) -> bool:
+            if ep.path == url:
                 return True
-            stripped = re.sub(r"\{[^}]+\}.*$", "", path).rstrip("/")
-            if stripped and stripped in source and f".{method_lower}(" in source:
-                return True
-            return False
+            stripped = _path_var_re.sub("", ep.path).rstrip("/")
+            return bool(stripped and url.startswith(stripped))
+
+        def find_best_endpoint(func: ast.FunctionDef, method_name: str) -> Optional[ParsedEndpoint]:
+            urls = extract_method_urls(func)
+            if not urls:
+                return None
+            candidates: List[ParsedEndpoint] = []
+            seen: set = set()
+            for url in urls:
+                for ep in endpoints:
+                    if ep.endpoint_id in seen:
+                        continue
+                    if url_matches_endpoint(url, ep):
+                        candidates.append(ep)
+                        seen.add(ep.endpoint_id)
+            if not candidates:
+                return None
+            if len(candidates) == 1:
+                return candidates[0]
+            # 对方法名和 path tail 做 normalize 比较：去掉所有非字母数字字符并 lower
+            # 这样 method 是 snake_case（test_get_uplink_device_list）也能匹配
+            # path tail 是 camelCase（getUplinkDeviceList）的端点
+            def _norm(s: str) -> str:
+                return re.sub(r"[^a-z0-9]", "", s.lower())
+            mn_norm = _norm(method_name)
+            last_url = urls[-1]
+            scored: List[Tuple[int, ParsedEndpoint]] = []
+            for ep in candidates:
+                score = 0
+                tail_norm = _norm(path_tail(ep.path))
+                if tail_norm and tail_norm in mn_norm:
+                    score += 100
+                if url_matches_endpoint(last_url, ep):
+                    score += 10
+                scored.append((score, ep))
+            scored.sort(key=lambda x: -x[0])
+            return scored[0][1]
+
+        # method index -> endpoint_id（每个 method 找最佳 endpoint，不再因为 break 早退）
+        method_to_ep: Dict[int, str] = {}
+        for idx, (_, mname, func_node) in enumerate(all_methods):
+            ep = find_best_endpoint(func_node, mname)
+            if ep:
+                method_to_ep[idx] = ep.endpoint_id
 
         ep_method_indices: Dict[str, List[int]] = {}
-        for idx, (_, _, src) in enumerate(all_methods):
-            for ep in endpoints:
-                if endpoint_matches_method(ep, src):
-                    ep_method_indices.setdefault(ep.endpoint_id, []).append(idx)
-                    break  # 一个 method 只归属第一个匹配的 endpoint
+        for idx, ep_id in method_to_ep.items():
+            ep_method_indices.setdefault(ep_id, []).append(idx)
 
         case_method_map: Dict[str, Dict[str, str]] = {}
-        # 按 endpoint 分组 test_cases，按顺序分配
         from collections import defaultdict
         cases_by_ep: Dict[str, List[GeneratedTestCase]] = defaultdict(list)
         for tc in test_cases:
@@ -1130,7 +1369,6 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
                 if i < len(method_idxs):
                     cls, mth, _ = all_methods[method_idxs[i]]
                 else:
-                    # 用例数 > 实际生成的 method 数：复用同 endpoint 的第一个 method
                     if method_idxs:
                         cls, mth, _ = all_methods[method_idxs[0]]
                     else:
@@ -1157,6 +1395,7 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
     def _chinese_to_pinyin(self, text: str) -> str:
         """中文转拼音（简化映射 + fallback）"""
         mapping = {
+            # 通用
             "用户": "user", "系统": "system", "登录": "login", "注册": "register",
             "订单": "order", "商品": "product", "支付": "payment", "菜单": "menu",
             "角色": "role", "权限": "permission", "部门": "department", "组织": "organization",
@@ -1167,6 +1406,27 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
             "项目": "project", "任务": "task", "资源": "resource", "接口": "interface",
             "数据": "data", "管理": "manage", "列表": "list", "详情": "detail",
             "创建": "create", "修改": "update", "删除": "delete", "会话": "session",
+            # 安全/告警领域
+            "告警": "alarm", "事件": "event", "定义": "definition", "规则": "rule",
+            "筛选": "filter", "标签": "tag", "类型": "type", "等级": "level",
+            "危险": "danger", "威胁": "threat", "攻击": "attack", "漏洞": "vulnerability",
+            "处置": "disposal", "工单": "ticket", "白名单": "whitelist", "黑名单": "blacklist",
+            "阻断": "block", "隔离": "isolate", "还原": "restore", "忽略": "ignore",
+            "复制": "copy", "模板": "template", "调度": "schedule", "状态": "status",
+            "来源": "source", "置信度": "confidence", "映射": "mapping", "全量": "all",
+            "分页": "page", "排序": "sort", "字段": "field", "参数": "param",
+            "详细": "detail", "基础": "basic", "信息": "info", "概览": "overview",
+            "大屏": "screen", "综合": "comprehensive", "态势": "situation", "地图": "map",
+            "流量": "traffic", "协议": "protocol", "资产": "asset", "主机": "host",
+            "设备": "device", "软件": "software", "端口": "port", "补丁": "patch",
+            "漏洞": "vul", "挂起": "suspend", "停止": "stop", "清点": "inventory",
+            "学习": "learn", "进度": "progress", "未知": "unknown", "新增": "add",
+            "编辑": "edit", "批量": "batch", "单个": "single", "验证": "verify",
+            "测试": "test", "发送": "send", "接收": "receive", "保存": "save",
+            "取消": "cancel", "确认": "confirm", "刷新": "refresh", "重置": "reset",
+            "启用": "enable", "禁用": "disable", "上架": "online", "下架": "offline",
+            "同步": "sync", "异步": "async", "导入": "import", "导出": "export",
+            "获取": "get", "设置": "set", "分配": "assign", "回收": "revoke",
         }
         for cn, en in mapping.items():
             if cn in text:
@@ -1192,13 +1452,31 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
         func_name = self._endpoint_to_function_name(endpoint)
         return f"created_{func_name}" if not func_name.startswith("created_") else func_name
 
-    def _sanitize_method_name(self, name: str) -> str:
-        """测试方法名清洗"""
+    def _sanitize_method_name(self, name: str, method: str = "", used_names: set = None) -> str:
+        """测试方法名清洗，融入 HTTP method 前缀并自动去重。
+
+        Args:
+            name: 原始中文/混合名称
+            method: HTTP 方法（get/post/put/delete/patch）
+            used_names: 已占用方法名集合，用于自动追加 _2/_3 后缀去重
+        """
         name = re.sub(r'[^a-zA-Z0-9_一-鿿]', '_', name)
         name = re.sub(r'[一-鿿]+', lambda m: self._chinese_to_pinyin(m.group()), name)
         name = re.sub(r'_+', '_', name).strip('_').lower()
         if not name.startswith("test_"):
             name = f"test_{name}"
+        # 融入 HTTP method
+        if method and method not in name:
+            name = name.replace("test_", f"test_{method}_")
+
+        if used_names is not None:
+            base = name
+            counter = 2
+            while name in used_names:
+                name = f"{base}_{counter}"
+                counter += 1
+            used_names.add(name)
+
         return name
 
     def _derive_script_name(self, endpoints: List[ParsedEndpoint]) -> str:

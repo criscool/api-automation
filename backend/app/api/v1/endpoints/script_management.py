@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from loguru import logger
 
 from app.services.api_automation.interface_script_service import InterfaceScriptService
+from app.services.api_automation.test_case_repair_service import repair_test_case_mapping
 from app.core.enums import ExecutionStatus
 
 router = APIRouter(tags=["脚本管理"])
@@ -1304,3 +1305,45 @@ async def stop_execution(execution_id: str):
     except Exception as e:
         logger.error(f"停止执行失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"停止执行失败: {str(e)}")
+
+
+# ==================== TestCase 映射修复 API ====================
+
+class RepairMappingRequest(BaseModel):
+    """修复映射请求"""
+    test_case_ids: Optional[List[str]] = Field(None, description="要修复的 test_case_id 列表，不传则修复全部缺失映射的用例")
+
+
+@router.post("/repair-mapping", summary="修复 TestCase 脚本映射")
+async def repair_mapping(request: RepairMappingRequest = None):
+    """
+    修复 class_name/method_name/script_file_path 为空的 TestCase 记录。
+
+    通过 AST 解析已有的 TestScript 脚本文件，反向匹配 TestCase 与 pytest 方法，
+    补齐缺失的映射字段，使用例可以正常执行。
+
+    - 传 test_case_ids：只修复指定用例
+    - 不传：修复所有缺失映射的用例
+    """
+    try:
+        ids = request.test_case_ids if request else None
+        result = await repair_test_case_mapping(ids)
+
+        if result["errors"]:
+            logger.warning(
+                f"映射修复部分失败: repaired={result['repaired']}, "
+                f"skipped={result['skipped']}, errors={len(result['errors'])}"
+            )
+        else:
+            logger.info(f"映射修复完成: repaired={result['repaired']}, skipped={result['skipped']}")
+
+        return {
+            "code": 200,
+            "msg": f"修复完成: 成功 {result['repaired']}, 跳过 {result['skipped']}, 错误 {len(result['errors'])}",
+            "data": result,
+            "success": True
+        }
+
+    except Exception as e:
+        logger.error(f"修复映射失败: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"修复映射失败: {str(e)}")

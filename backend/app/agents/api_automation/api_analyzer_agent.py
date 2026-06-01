@@ -352,27 +352,60 @@ class ApiAnalyzerAgent(BaseApiAutomationAgent):
         
         return json.dumps(formatted_endpoints, indent=2, ensure_ascii=False)
 
+    # action 风格端点的动词角色映射
+    # 末尾路径段（小写）→ CRUD 角色
+    _ACTION_VERB_ROLE = {
+        # create
+        "add": "create",
+        "create": "create",
+        "new": "create",
+        "save": "create",
+        "insert": "create",
+        "register": "create",
+        # delete
+        "delete": "delete",
+        "remove": "delete",
+        "destroy": "delete",
+        "drop": "delete",
+        "del": "delete",
+        # update
+        "update": "update",
+        "modify": "update",
+        "edit": "update",
+        "patch": "update",
+        # read
+        "get": "read",
+        "query": "read",
+        "list": "read",
+        "search": "read",
+        "find": "read",
+        "detail": "read",
+        "info": "read",
+        "view": "read",
+    }
+
     def _detect_crud_dependencies_heuristic(
         self,
         endpoints: List[ParsedEndpoint],
         existing: Optional[List[EndpointDependency]] = None,
     ) -> List[EndpointDependency]:
-        """启发式识别 CRUD 依赖：POST 创建资源 → DELETE/PUT/GET 操作子路径资源。
+        """启发式识别 CRUD 依赖，覆盖两类风格：
 
-        匹配规则：
-        - POST 端点路径 P 视为资源集合 URI
-        - 任何 method ∈ {DELETE, PUT, PATCH, GET} 且路径形如 P + "/{xxx}"（含路径参数）
-          均被视为依赖该 POST 创建的资源
+        1) REST 风格：POST `/resource` → DELETE/PUT/PATCH/GET `/resource/{id}`
+        2) Action 风格（同前缀不同动词）：
+           POST `/resource/add` → POST `/resource/delete`（或 update/get/query 等）
+           动词映射见 `_ACTION_VERB_ROLE`
         """
         import re
         existing_keys = set()
         for d in (existing or []):
             existing_keys.add((d.source_endpoint_id, d.target_endpoint_id))
 
+        new_deps: List[EndpointDependency] = []
+
+        # === 第 1 类：REST 风格 ===
         post_endpoints = [ep for ep in endpoints if ep.method.value.upper() == "POST"]
         other_endpoints = [ep for ep in endpoints if ep.method.value.upper() in ("DELETE", "PUT", "PATCH", "GET")]
-
-        new_deps: List[EndpointDependency] = []
         path_var = re.compile(r"\{[^/{}]+\}|:[A-Za-z_][A-Za-z0-9_]*")
 
         for post in post_endpoints:
@@ -399,6 +432,45 @@ class ApiAnalyzerAgent(BaseApiAutomationAgent):
                     condition=None,
                 ))
                 existing_keys.add(key)
+
+        # === 第 2 类：Action 风格（同前缀不同动词） ===
+        # 把每个端点拆成 (前缀, 末段动词角色)
+        prefix_groups: Dict[str, Dict[str, List[ParsedEndpoint]]] = {}
+        for ep in endpoints:
+            path = ep.path.rstrip("/")
+            if not path:
+                continue
+            segments = [seg for seg in path.split("/") if seg]
+            if len(segments) < 2:
+                continue
+            last = segments[-1].lower()
+            role = self._ACTION_VERB_ROLE.get(last)
+            if role is None:
+                continue
+            prefix = "/" + "/".join(segments[:-1])
+            prefix_groups.setdefault(prefix, {}).setdefault(role, []).append(ep)
+
+        for prefix, role_map in prefix_groups.items():
+            create_eps = role_map.get("create", [])
+            if not create_eps:
+                continue
+            # create → delete / update / read
+            for source in create_eps:
+                for target_role in ("delete", "update", "read"):
+                    for target in role_map.get(target_role, []):
+                        if source.endpoint_id == target.endpoint_id:
+                            continue
+                        key = (source.endpoint_id, target.endpoint_id)
+                        if key in existing_keys:
+                            continue
+                        new_deps.append(EndpointDependency(
+                            source_endpoint_id=source.endpoint_id,
+                            target_endpoint_id=target.endpoint_id,
+                            dependency_type=DependencyType.SEQUENCE,
+                            description=f"Action 链：{source.method.value} {source.path} → {target.method.value} {target.path}",
+                            condition=None,
+                        ))
+                        existing_keys.add(key)
 
         return new_deps
 

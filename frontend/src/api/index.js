@@ -150,6 +150,10 @@ export default {
   getSystemLogs: (params = {}) => request.get('/api-automation/logs', { params }),
   getAgentMetrics: (params = {}) => request.get('/api-automation/metrics', { params }),
 
+  // 依赖 JSON 导入
+  importDependencyDoc: (formData) => request.post('/api-automation/dependency-import', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  getDependencyImportResult: (params) => request.get('/api-automation/dependency-import-result', { params }),
+
   // 执行报告API（新模块）
   getExecutionReports: (params = {}) => request.get('/execution-reports', { params }),
   getExecutionReportDetail: (executionId) => request.get(`/execution-reports/${executionId}`),

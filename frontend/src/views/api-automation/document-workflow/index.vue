@@ -28,11 +28,12 @@
                 <Icon icon="mdi:cloud-upload" />
               </n-icon>
             </div>
-            <n-text style="font-size: 16px">
-              点击或者拖动文件到该区域来上传
-            </n-text>
+            <n-text style="font-size: 16px"> 点击或者拖动文件到该区域来上传 </n-text>
             <n-p depth="3" style="margin: 8px 0 0 0">
               支持 OpenAPI/Swagger (.json, .yaml)、Postman Collection (.json) 和 PDF 接口文档格式
+            </n-p>
+            <n-p depth="3" style="margin: 4px 0 0 0; font-size: 12px; color: #f0a020;">
+              提示：预分析依赖 JSON 文件（含 chains/dependencies 结构）请使用 Step 3 的「快速导入」通道
             </n-p>
           </n-upload-dragger>
         </n-upload>
@@ -43,7 +44,7 @@
           </n-alert>
 
           <div class="mt-4 flex justify-end">
-            <n-button type="primary" @click="uploadAndParse" :loading="uploading || parsing">
+            <n-button type="primary" :loading="uploading || parsing" @click="uploadAndParse">
               {{ uploading ? '上传中...' : parsing ? '解析中...' : '上传并解析' }}
             </n-button>
           </div>
@@ -60,14 +61,14 @@
     <!-- 步骤2: 文档解析 -->
     <n-card v-if="currentStep === 2" title="文档解析中" class="mb-6">
       <div class="parsing-section">
-        <div class="flex items-center mb-4">
+        <div class="mb-4 flex items-center">
           <n-spin size="small" />
           <span class="ml-2">{{ parsingStatus }}</span>
         </div>
-        
-        <n-progress 
-          type="line" 
-          :percentage="parsingProgress" 
+
+        <n-progress
+          type="line"
+          :percentage="parsingProgress"
           :show-indicator="true"
           status="active"
         />
@@ -76,7 +77,9 @@
         <div class="mt-4">
           <n-collapse>
             <n-collapse-item title="解析日志" name="logs">
-              <div class="bg-black text-green-400 p-4 rounded font-mono text-sm h-48 overflow-y-auto">
+              <div
+                class="h-48 overflow-y-auto rounded bg-black p-4 text-sm font-mono text-green-400"
+              >
                 <div v-for="(log, index) in parsingLogs" :key="index" class="mb-1">
                   <span class="text-gray-500">[{{ formatTime(log.timestamp) }}]</span>
                   <span>{{ log.message }}</span>
@@ -90,9 +93,82 @@
 
     <!-- 步骤3: 解析结果 -->
     <n-card v-if="currentStep === 3" title="解析结果" class="mb-6">
-      <div v-if="parseResult">
+      <!-- ========== 0 接口：依赖 JSON 快速导入通道 ========== -->
+      <template v-if="parseResult && parseResult.endpointsCount === 0">
+        <n-alert type="warning" title="未解析到标准 API 接口" class="mb-4">
+          <p>当前文档未检测到 OpenAPI/Swagger/Postman 标准接口结构。</p>
+          <p>
+            如果该文件是<strong>预分析依赖 JSON</strong>（含 chains / dependencies / baseUrl 字段），
+            请直接使用下方通道导入，可跳过分析流程生成场景测试脚本。
+          </p>
+        </n-alert>
+
+        <n-card title="快速导入：预分析依赖 JSON → 场景测试脚本" size="small" class="mb-4">
+          <n-alert type="info" :bordered="false" class="mb-4">
+            上传预分析依赖 JSON 文件（如 ai-testmind 产出的依赖分析文件），
+            将直接通过模板渲染生成场景测试脚本，不经过 ApiAnalyzer / TestCaseGenerator。
+          </n-alert>
+          <div class="dependency-import-upload">
+            <n-upload
+              ref="depImportUploadRef"
+              :max="1"
+              accept=".json"
+              :default-upload="false"
+              @change="handleDepImportFileChange"
+            >
+              <n-button>选择依赖 JSON</n-button>
+            </n-upload>
+            <div v-if="depImportFile" class="mt-2">
+              <n-tag type="info">{{ depImportFile.name }}</n-tag>
+            </div>
+            <div class="mt-4 flex items-center gap-3">
+              <n-button
+                type="primary"
+                :loading="depImporting"
+                :disabled="!depImportFile"
+                @click="importDependencyDoc"
+              >
+                导入并生成场景脚本
+              </n-button>
+              <n-button v-if="depImportTaskId" size="small" @click="checkDepImportResult">
+                查询结果
+              </n-button>
+            </div>
+            <n-alert
+              v-if="depImportAlert"
+              :type="depImportAlert.type"
+              class="mt-4"
+              :title="depImportAlert.title"
+            >
+              {{ depImportAlert.msg }}
+              <div v-if="depImportAlert.data" class="mt-2 text-sm">
+                <div>场景数: {{ depImportAlert.data.scenariosCount }}</div>
+                <div v-if="depImportAlert.data.endpointsCount">
+                  接口数: {{ depImportAlert.data.endpointsCount }}
+                </div>
+                <div v-if="depImportAlert.data.testCasesCount">
+                  测试用例: {{ depImportAlert.data.testCasesCount }}
+                </div>
+                <div v-if="depImportAlert.data.scriptsExpected">
+                  预期脚本: {{ depImportAlert.data.scriptsExpected }}
+                </div>
+              </div>
+              <div v-if="depImportAlert.data?.scriptsExpected" class="mt-2">
+                <n-button size="small" @click="goToScriptManagement">去脚本管理查看</n-button>
+              </div>
+            </n-alert>
+          </div>
+        </n-card>
+
+        <div class="flex justify-between">
+          <n-button @click="currentStep = 1">重新上传其他文档</n-button>
+        </div>
+      </template>
+
+      <!-- ========== 有接口：正常流程 ========== -->
+      <div v-else-if="parseResult">
         <!-- 解析摘要 -->
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+        <div class="grid grid-cols-1 mb-6 gap-4 md:grid-cols-4">
           <n-statistic label="接口数量" :value="parseResult.endpointsCount" />
           <n-statistic label="数据模型" :value="parseResult.schemasCount" />
           <n-statistic label="解析置信度" :value="`${parseResult.confidenceScore}%`" />
@@ -109,22 +185,119 @@
               max-height="400"
             />
           </n-tab-pane>
-          
+
           <n-tab-pane name="schemas" tab="数据模型">
-            <n-tree
-              :data="schemaTreeData"
-              :render-label="renderSchemaLabel"
-              block-line
-            />
+            <n-tree :data="schemaTreeData" :render-label="renderSchemaLabel" block-line />
           </n-tab-pane>
         </n-tabs>
 
         <div class="flex justify-between">
           <n-button @click="currentStep = 1">重新上传</n-button>
-          <n-button type="primary" @click="startAnalysis">
-            开始接口分析
-          </n-button>
+          <n-space>
+            <n-button type="primary" :loading="directGenerating" @click="directGenerateTests">
+              直接生成测试用例
+            </n-button>
+            <n-button @click="startAnalysis"> 开始接口分析 </n-button>
+          </n-space>
         </div>
+
+        <!-- 直接生成进度 -->
+        <div v-if="directGenerating" class="mt-4 border rounded p-4">
+          <div class="mb-2 flex items-center">
+            <n-spin size="small" />
+            <span class="ml-2">{{ directGenStatus }}</span>
+          </div>
+          <n-progress
+            type="line"
+            :percentage="directGenProgress"
+            :show-indicator="true"
+            status="active"
+          />
+        </div>
+        <div v-else-if="directGenResult" class="mt-4">
+          <n-alert type="success" title="测试用例生成完成" class="mb-2">
+            已生成 {{ directGenResult.scriptsCount || 0 }} 个测试脚本，包含
+            {{ directGenResult.totalTestCases || 0 }} 个测试用例
+          </n-alert>
+          <div class="flex justify-end">
+            <n-button size="small" @click="goToScriptManagement">管理测试脚本</n-button>
+          </div>
+        </div>
+        <n-alert
+          v-else-if="directGenError"
+          type="error"
+          title="生成失败"
+          class="mt-4"
+          closable
+          @close="directGenError = null"
+        >
+          {{ directGenError }}
+        </n-alert>
+
+        <!-- 依赖 JSON 导入旁路 -->
+        <n-divider />
+        <n-collapse class="mt-2">
+          <n-collapse-item
+            title="快速导入：预分析依赖 JSON 直接生成脚本（跳过分析流程）"
+            name="dependency-import"
+          >
+            <n-alert type="info" :bordered="false" class="mb-4">
+              上传预分析依赖 JSON 文件（如 ai-testmind 产出的依赖分析文件），
+              将直接通过模板渲染生成场景测试脚本，不经过 ApiAnalyzer / TestCaseGenerator。
+            </n-alert>
+            <div class="dependency-import-upload">
+              <n-upload
+                ref="depImportUploadRef"
+                :max="1"
+                accept=".json"
+                :default-upload="false"
+                @change="handleDepImportFileChange"
+              >
+                <n-button>选择依赖 JSON</n-button>
+              </n-upload>
+              <div v-if="depImportFile" class="mt-2">
+                <n-tag type="info">{{ depImportFile.name }}</n-tag>
+              </div>
+              <div class="mt-4 flex items-center gap-3">
+                <n-button
+                  type="primary"
+                  secondary
+                  :loading="depImporting"
+                  :disabled="!depImportFile"
+                  @click="importDependencyDoc"
+                >
+                  导入并生成场景脚本
+                </n-button>
+                <n-button v-if="depImportTaskId" size="small" @click="checkDepImportResult">
+                  查询结果
+                </n-button>
+              </div>
+              <n-alert
+                v-if="depImportAlert"
+                :type="depImportAlert.type"
+                class="mt-4"
+                :title="depImportAlert.title"
+              >
+                {{ depImportAlert.msg }}
+                <div v-if="depImportAlert.data" class="mt-2 text-sm">
+                  <div>场景数: {{ depImportAlert.data.scenariosCount }}</div>
+                  <div v-if="depImportAlert.data.endpointsCount">
+                    接口数: {{ depImportAlert.data.endpointsCount }}
+                  </div>
+                  <div v-if="depImportAlert.data.testCasesCount">
+                    测试用例: {{ depImportAlert.data.testCasesCount }}
+                  </div>
+                  <div v-if="depImportAlert.data.scriptsExpected">
+                    预期脚本: {{ depImportAlert.data.scriptsExpected }}
+                  </div>
+                </div>
+                <div v-if="depImportAlert.data?.scriptsExpected" class="mt-2">
+                  <n-button size="small" @click="goToScriptManagement">去脚本管理查看</n-button>
+                </div>
+              </n-alert>
+            </div>
+          </n-collapse-item>
+        </n-collapse>
       </div>
     </n-card>
 
@@ -132,8 +305,13 @@
     <n-card v-if="currentStep === 4" title="接口分析" class="mb-6">
       <div v-if="!analyzing">
         <!-- 分析配置 -->
-        <n-form ref="analysisFormRef" :model="analysisConfig" label-placement="left" label-width="120px">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <n-form
+          ref="analysisFormRef"
+          :model="analysisConfig"
+          label-placement="left"
+          label-width="120px"
+        >
+          <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
             <div>
               <n-form-item label="分析类型">
                 <n-checkbox-group v-model:value="analysisConfig.analysisTypes">
@@ -146,7 +324,7 @@
                 </n-checkbox-group>
               </n-form-item>
             </div>
-            
+
             <div>
               <n-form-item label="分析深度">
                 <n-radio-group v-model:value="analysisConfig.depth">
@@ -159,9 +337,9 @@
               </n-form-item>
             </div>
           </div>
-          
+
           <n-form-item>
-            <n-button type="primary" @click="executeAnalysis" :loading="analyzing">
+            <n-button type="primary" :loading="analyzing" @click="executeAnalysis">
               执行分析
             </n-button>
           </n-form-item>
@@ -170,14 +348,14 @@
 
       <!-- 分析进行中 -->
       <div v-if="analyzing" class="analysis-progress">
-        <div class="flex items-center mb-4">
+        <div class="mb-4 flex items-center">
           <n-spin size="small" />
           <span class="ml-2">{{ analysisStatus }}</span>
         </div>
-        
-        <n-progress 
-          type="line" 
-          :percentage="analysisProgress" 
+
+        <n-progress
+          type="line"
+          :percentage="analysisProgress"
           :show-indicator="true"
           status="active"
         />
@@ -192,9 +370,7 @@
 
         <div class="flex justify-between">
           <n-button @click="viewAnalysisDetail">查看详细分析</n-button>
-          <n-button type="primary" @click="proceedToTestGeneration">
-            生成测试脚本
-          </n-button>
+          <n-button type="primary" @click="proceedToTestGeneration"> 生成测试脚本 </n-button>
         </div>
       </div>
     </n-card>
@@ -203,13 +379,18 @@
     <n-card v-if="currentStep === 5" title="生成测试脚本" class="mb-6">
       <div v-if="!generating">
         <!-- 测试生成配置 -->
-        <n-form ref="generationFormRef" :model="generationConfig" label-placement="left" label-width="120px">
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <n-form
+          ref="generationFormRef"
+          :model="generationConfig"
+          label-placement="left"
+          label-width="120px"
+        >
+          <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
             <div>
               <n-form-item label="测试框架">
                 <n-select v-model:value="generationConfig.framework" :options="frameworkOptions" />
               </n-form-item>
-              
+
               <n-form-item label="测试类型">
                 <n-checkbox-group v-model:value="generationConfig.testTypes">
                   <n-space vertical>
@@ -221,7 +402,7 @@
                 </n-checkbox-group>
               </n-form-item>
             </div>
-            
+
             <div>
               <n-form-item label="测试级别">
                 <n-radio-group v-model:value="generationConfig.testLevel">
@@ -232,7 +413,7 @@
                   </n-space>
                 </n-radio-group>
               </n-form-item>
-              
+
               <n-form-item label="生成选项">
                 <n-checkbox-group v-model:value="generationConfig.options">
                   <n-space vertical>
@@ -245,9 +426,9 @@
               </n-form-item>
             </div>
           </div>
-          
+
           <n-form-item>
-            <n-button type="primary" @click="generateTests" :loading="generating">
+            <n-button type="primary" :loading="generating" @click="generateTests">
               生成测试脚本
             </n-button>
           </n-form-item>
@@ -256,14 +437,14 @@
 
       <!-- 生成进行中 -->
       <div v-if="generating" class="generation-progress">
-        <div class="flex items-center mb-4">
+        <div class="mb-4 flex items-center">
           <n-spin size="small" />
           <span class="ml-2">{{ generationStatus }}</span>
         </div>
-        
-        <n-progress 
-          type="line" 
-          :percentage="generationProgress" 
+
+        <n-progress
+          type="line"
+          :percentage="generationProgress"
           :show-indicator="true"
           status="active"
         />
@@ -272,11 +453,11 @@
       <!-- 生成结果 -->
       <div v-if="generationResult" class="generation-result mt-6">
         <n-alert type="success" title="测试脚本生成完成" class="mb-4">
-          已生成 {{ generationResult.totalTestFiles }} 个测试文件，
-          包含 {{ generationResult.totalTestCases }} 个测试用例
+          已生成 {{ generationResult.totalTestFiles }} 个测试文件， 包含
+          {{ generationResult.totalTestCases }} 个测试用例
         </n-alert>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <div class="grid grid-cols-1 mb-4 gap-4 md:grid-cols-3">
           <n-statistic label="测试文件" :value="generationResult.totalTestFiles" />
           <n-statistic label="测试用例" :value="generationResult.totalTestCases" />
           <n-statistic label="覆盖率评分" :value="`${generationResult.coverageScore}%`" />
@@ -287,9 +468,7 @@
             <n-button @click="previewTestScripts">预览脚本</n-button>
             <n-button @click="downloadTestScripts">下载脚本</n-button>
           </n-space>
-          <n-button type="primary" @click="goToTestManagement">
-            管理测试脚本
-          </n-button>
+          <n-button type="primary" @click="goToTestManagement"> 管理测试脚本 </n-button>
         </div>
       </div>
     </n-card>
@@ -305,8 +484,8 @@
       :closable="false"
     >
       <n-alert type="warning" class="mb-4">
-        以下 {{ pendingDuplicatesList.length }} 个接口与已有文档中的接口存在重复（method + path 相同）。
-        请逐一选择处理方式后提交。
+        以下 {{ pendingDuplicatesList.length }} 个接口与已有文档中的接口存在重复（method + path
+        相同）。 请逐一选择处理方式后提交。
       </n-alert>
 
       <n-data-table
@@ -314,10 +493,10 @@
         :data="pendingDuplicatesList"
         :pagination="{ pageSize: 10 }"
         max-height="400"
-        :row-key="row => row.fingerprint"
+        :row-key="(row) => row.fingerprint"
       />
 
-      <div class="mt-4 flex justify-between items-center">
+      <div class="mt-4 flex items-center justify-between">
         <n-space>
           <n-button size="small" @click="batchSetAction('overwrite')">全部使用新版本</n-button>
           <n-button size="small" @click="batchSetAction('keep_existing')">全部保留旧版本</n-button>
@@ -357,9 +536,9 @@ const stepStatus = ref('process')
 // 1=上传 / 2=解析中 / 3=解析结果 / 4=接口分析 / 5=生成测试
 const visualStep = computed(() => {
   const step = currentStep.value
-  if (step <= 2) return step                  // 上传 / 解析
-  if (step === 3 || step === 4) return 3      // 解析结果 + 接口分析 都算"接口分析"步
-  return 4                                    // 生成测试
+  if (step <= 2) return step // 上传 / 解析
+  if (step === 3 || step === 4) return 3 // 解析结果 + 接口分析 都算"接口分析"步
+  return 4 // 生成测试
 })
 
 // 文件上传
@@ -390,7 +569,7 @@ const analysisProgress = ref(0)
 const analysisResult = ref(null)
 const analysisConfig = ref({
   analysisTypes: ['dependency', 'security'],
-  depth: 'detailed'
+  depth: 'detailed',
 })
 
 // 生成状态
@@ -402,14 +581,125 @@ const generationConfig = ref({
   framework: 'pytest',
   testTypes: ['functional'],
   testLevel: 'integration',
-  options: ['mock_data', 'assertions']
+  options: ['mock_data', 'assertions'],
 })
+
+// 直接生成测试用例
+const directGenerating = ref(false)
+const directGenProgress = ref(0)
+const directGenStatus = ref('')
+const directGenResult = ref(null)
+const directGenError = ref(null)
+
+// 依赖 JSON 导入
+const depImportUploadRef = ref()
+const depImportFile = ref(null)
+const depImporting = ref(false)
+const depImportTaskId = ref(null)
+const depImportDocId = ref(null)
+const depImportAlert = ref(null)
+
+const handleDepImportFileChange = ({ fileList: newFileList }) => {
+  if (newFileList.length > 0) {
+    depImportFile.value = newFileList[0].file
+    depImportAlert.value = null
+  } else {
+    depImportFile.value = null
+  }
+}
+
+const importDependencyDoc = async () => {
+  if (!depImportFile.value) return
+  depImporting.value = true
+  depImportAlert.value = null
+
+  try {
+    const formData = new FormData()
+    formData.append('file', depImportFile.value)
+
+    const resp = await api.importDependencyDoc(formData)
+
+    if (resp.success) {
+      depImportTaskId.value = resp.data.taskId
+      depImportDocId.value = resp.data.docId
+      depImportAlert.value = {
+        type: 'success',
+        title: '导入成功，脚本正在生成中',
+        msg: `已提交 ${resp.data.scenariosCount} 个场景，预期生成 ${resp.data.scriptsExpected} 个脚本文件`,
+        data: resp.data,
+      }
+    } else {
+      depImportAlert.value = {
+        type: 'error',
+        title: '导入失败',
+        msg: resp.msg || '请检查文件格式',
+        data: null,
+      }
+    }
+  } catch (err) {
+    const detail = err?.response?.data?.detail || err.message || '未知错误'
+    depImportAlert.value = {
+      type: 'error',
+      title: '导入失败',
+      msg: detail,
+      data: null,
+    }
+  } finally {
+    depImporting.value = false
+  }
+}
+
+const checkDepImportResult = async () => {
+  if (!depImportTaskId.value) return
+  try {
+    const resp = await api.getDependencyImportResult({
+      taskId: depImportTaskId.value,
+      docId: depImportDocId.value,
+    })
+    if (resp.success) {
+      const status = resp.data?.status
+      if (status === 'completed') {
+        depImportAlert.value = {
+          type: 'success',
+          title: '脚本生成完成',
+          msg: `共生成 ${resp.data.scriptsCount} 个脚本文件`,
+          data: { scriptsExpected: resp.data.scriptsCount },
+        }
+      } else if (status === 'failed') {
+        depImportAlert.value = {
+          type: 'error',
+          title: '脚本生成失败',
+          msg: resp.msg || '请查看日志',
+          data: null,
+        }
+      } else {
+        depImportAlert.value = {
+          type: 'warning',
+          title: '生成进行中',
+          msg: '脚本仍在生成中，请稍后查询',
+          data: null,
+        }
+      }
+    }
+  } catch (err) {
+    depImportAlert.value = {
+      type: 'error',
+      title: '查询失败',
+      msg: err?.response?.data?.detail || err.message || '未知错误',
+      data: null,
+    }
+  }
+}
+
+const goToScriptManagement = () => {
+  router.push('/api-automation/script-management')
+}
 
 // 选项数据
 const frameworkOptions = [
   { label: 'pytest', value: 'pytest' },
   { label: 'unittest', value: 'unittest' },
-  { label: 'requests', value: 'requests' }
+  { label: 'requests', value: 'requests' },
 ]
 
 // 表格列定义
@@ -417,26 +707,33 @@ const endpointColumns = [
   { title: '方法', key: 'method', width: 80 },
   { title: '路径', key: 'path', width: 200 },
   { title: '摘要', key: 'summary', ellipsis: true },
-  { title: '认证', key: 'authRequired', width: 80, render: (row) => row.authRequired ? '是' : '否' }
+  {
+    title: '认证',
+    key: 'authRequired',
+    width: 80,
+    render: (row) => (row.authRequired ? '是' : '否'),
+  },
 ]
 
 // 计算属性
 const schemaTreeData = computed(() => {
   if (!parseResult.value?.schemas) return []
-  return Object.keys(parseResult.value.schemas).map(key => ({
+  return Object.keys(parseResult.value.schemas).map((key) => ({
     label: key,
     key: key,
-    children: []
+    children: [],
   }))
 })
 
 // 重复接口弹窗计算属性
 const resolvedCount = computed(() => {
-  return pendingDuplicatesList.value.filter(d => resolutions.value[d.fingerprint]).length
+  return pendingDuplicatesList.value.filter((d) => resolutions.value[d.fingerprint]).length
 })
 const allResolved = computed(() => {
-  return pendingDuplicatesList.value.length > 0 &&
+  return (
+    pendingDuplicatesList.value.length > 0 &&
     resolvedCount.value === pendingDuplicatesList.value.length
+  )
 })
 
 // 重复接口表格列
@@ -445,43 +742,45 @@ const duplicateColumns = [
     title: '方法',
     key: 'method',
     width: 80,
-    render: (row) => h(NTag, { type: 'info', size: 'small' }, { default: () => row.method })
+    render: (row) => h(NTag, { type: 'info', size: 'small' }, { default: () => row.method }),
   },
   { title: '路径', key: 'path', width: 220, ellipsis: { tooltip: true } },
   {
     title: '新接口',
     key: 'new_name',
     ellipsis: { tooltip: true },
-    render: (row) => row.new_name || '-'
+    render: (row) => row.new_name || '-',
   },
   {
     title: '已有接口（来自）',
     key: 'existing',
     ellipsis: { tooltip: true },
-    render: (row) => `${row.existing_name || '-'} (${row.existing_document_name || '未知文档'})`
+    render: (row) => `${row.existing_name || '-'} (${row.existing_document_name || '未知文档'})`,
   },
   {
     title: '处理方式',
     key: 'action',
     width: 230,
-    render: (row) => h(
-      NRadioGroup,
-      {
-        value: resolutions.value[row.fingerprint] || null,
-        'onUpdate:value': (v) => {
-          resolutions.value = { ...resolutions.value, [row.fingerprint]: v }
+    render: (row) =>
+      h(
+        NRadioGroup,
+        {
+          value: resolutions.value[row.fingerprint] || null,
+          'onUpdate:value': (v) => {
+            resolutions.value = { ...resolutions.value, [row.fingerprint]: v }
+          },
+        },
+        {
+          default: () =>
+            h(NSpace, null, {
+              default: () => [
+                h(NRadio, { value: 'overwrite' }, { default: () => '使用新版本' }),
+                h(NRadio, { value: 'keep_existing' }, { default: () => '保留旧版本' }),
+              ],
+            }),
         }
-      },
-      {
-        default: () => h(NSpace, null, {
-          default: () => [
-            h(NRadio, { value: 'overwrite' }, { default: () => '使用新版本' }),
-            h(NRadio, { value: 'keep_existing' }, { default: () => '保留旧版本' })
-          ]
-        })
-      }
-    )
-  }
+      ),
+  },
 ]
 
 // 方法
@@ -492,7 +791,7 @@ const beforeUpload = (data) => {
     name: file.name,
     type: file.type,
     size: file.size,
-    sizeInMB: (file.size / 1024 / 1024).toFixed(2)
+    sizeInMB: (file.size / 1024 / 1024).toFixed(2),
   })
 
   // 支持的文件类型（包含各种可能的MIME类型）
@@ -509,7 +808,7 @@ const beforeUpload = (data) => {
     'application/yaml',
 
     // PDF格式
-    'application/pdf'
+    'application/pdf',
   ]
 
   const supportedExtensions = ['.json', '.yaml', '.yml', '.pdf']
@@ -518,8 +817,8 @@ const beforeUpload = (data) => {
   const fileName = file.name.toLowerCase()
   const fileType = file.type.toLowerCase()
 
-  const isValidType = supportedTypes.includes(fileType) ||
-                     supportedExtensions.some(ext => fileName.endsWith(ext))
+  const isValidType =
+    supportedTypes.includes(fileType) || supportedExtensions.some((ext) => fileName.endsWith(ext))
 
   if (!isValidType) {
     message.error(`不支持的文件格式。文件: ${file.name}, 类型: ${file.type}`)
@@ -537,7 +836,7 @@ const beforeUpload = (data) => {
     isPdfFile,
     maxSize,
     fileSizeInMB: fileSizeInMB.toFixed(2),
-    isValid: fileSizeInMB < maxSize
+    isValid: fileSizeInMB < maxSize,
   })
 
   if (fileSizeInMB >= maxSize) {
@@ -562,7 +861,7 @@ const handleUploadFinish = ({ file, event }) => {
       uploadedFile.value = {
         name: file.name,
         size: file.size,
-        docId: response.data.docId
+        docId: response.data.docId,
       }
       message.success('文件上传成功')
     } else {
@@ -602,13 +901,16 @@ const uploadAndParse = async () => {
     const formData = new FormData()
     formData.append('file', selectedFile.value)
     formData.append('doc_format', 'auto')
-    formData.append('auto_parse', 'true')  // 启用自动解析
-    formData.append('config', JSON.stringify({
-      extractSchemas: true,
-      analyzeDependencies: true,
-      generateExamples: true,
-      isPdfDocument: selectedFile.value.name.toLowerCase().endsWith('.pdf')
-    }))
+    formData.append('auto_parse', 'true') // 启用自动解析
+    formData.append(
+      'config',
+      JSON.stringify({
+        extractSchemas: true,
+        analyzeDependencies: true,
+        generateExamples: true,
+        isPdfDocument: selectedFile.value.name.toLowerCase().endsWith('.pdf'),
+      })
+    )
 
     // 调用上传API
     const response = await api.uploadDocument(formData)
@@ -622,7 +924,7 @@ const uploadAndParse = async () => {
         docId: response.data.docId,
         sessionId: response.data.sessionId,
         status: response.data.status,
-        autoParse: response.data.autoParse
+        autoParse: response.data.autoParse,
       }
 
       message.success('文件上传成功')
@@ -640,11 +942,9 @@ const uploadAndParse = async () => {
         // 手动解析模式，显示解析按钮
         currentStep.value = 2
       }
-
     } else {
       message.error(response.message || '文件上传失败')
     }
-
   } catch (error) {
     console.error('上传失败:', error)
     message.error(`文件上传失败: ${error.message || '未知错误'}`)
@@ -769,14 +1069,14 @@ const submitResolveDuplicates = async () => {
 
   resolvingDuplicates.value = true
   try {
-    const resolutionList = pendingDuplicatesList.value.map(item => ({
+    const resolutionList = pendingDuplicatesList.value.map((item) => ({
       fingerprint: item.fingerprint,
-      action: resolutions.value[item.fingerprint]
+      action: resolutions.value[item.fingerprint],
     }))
 
     const response = await api.resolveDuplicates({
       doc_id: currentDocId.value,
-      resolutions: resolutionList
+      resolutions: resolutionList,
     })
 
     if (response.success) {
@@ -825,7 +1125,7 @@ const startParsing = async () => {
       extractSchemas: true,
       analyzeDependencies: true,
       generateExamples: true,
-      isPdfDocument: isPdf
+      isPdfDocument: isPdf,
     })
 
     if (response.success) {
@@ -856,7 +1156,7 @@ const executeAnalysis = async () => {
   try {
     const response = await api.analyzeApiEndpoints({
       docId: uploadedFile.value.docId,
-      config: analysisConfig.value
+      config: analysisConfig.value,
     })
 
     // 模拟分析进度
@@ -910,7 +1210,6 @@ const executeAnalysis = async () => {
     }
 
     setTimeout(checkAnalysis, 2000)
-
   } catch (error) {
     analyzing.value = false
     message.error('启动分析失败')
@@ -930,7 +1229,7 @@ const generateTests = async () => {
     const response = await api.generateTestScripts({
       docId: uploadedFile.value.docId,
       analysisId: analysisResult.value.analysisId,
-      config: generationConfig.value
+      config: generationConfig.value,
     })
 
     // 模拟生成进度
@@ -982,17 +1281,93 @@ const generateTests = async () => {
     }
 
     setTimeout(checkGeneration, 2000)
-
   } catch (error) {
     generating.value = false
     message.error('启动生成失败')
   }
 }
 
+const directGenerateTests = async () => {
+  if (!uploadedFile.value?.docId) {
+    message.error('请先上传文档')
+    return
+  }
+
+  directGenerating.value = true
+  directGenProgress.value = 0
+  directGenStatus.value = '正在启动流水线...'
+  directGenResult.value = null
+  directGenError.value = null
+
+  try {
+    // Step 1: 触发分析流水线（自动链式触发 Analyzer → TestCaseGenerator → ScriptGenerator）
+    directGenStatus.value = '正在分析接口...'
+    const analysisResp = await api.analyzeApiEndpoints({
+      docId: uploadedFile.value.docId,
+      config: { analysisTypes: ['dependency', 'security'], depth: 'detailed' },
+    })
+
+    if (!analysisResp.success) {
+      throw new Error(analysisResp.msg || '启动分析失败')
+    }
+
+    const analysisId = analysisResp.data.analysisId
+    directGenProgress.value = 20
+
+    // Step 2: 轮询结果（流水线完成后脚本落库，analysis-result 返回 scriptsCount）
+    let errorRetries = 0
+    const MAX_ERROR_RETRIES = 5
+
+    const pollResult = await new Promise((resolve, reject) => {
+      const check = async () => {
+        try {
+          const result = await api.getAnalysisResult({
+            analysisId,
+            docId: uploadedFile.value.docId,
+          })
+          errorRetries = 0
+
+          const status = result?.data?.status
+          if (status === 'completed') {
+            directGenProgress.value = 95
+            directGenStatus.value = '测试用例生成完成'
+            resolve(result.data)
+          } else if (status === 'failed') {
+            reject(new Error(result?.msg || '生成失败'))
+          } else {
+            directGenProgress.value = Math.min(directGenProgress.value + 5, 80)
+            directGenStatus.value = `生成中... ${Math.round(directGenProgress.value)}%`
+            setTimeout(check, 2000)
+          }
+        } catch (e) {
+          errorRetries += 1
+          if (errorRetries >= MAX_ERROR_RETRIES) {
+            reject(new Error(`查询失败：${e?.message || '请检查后端服务'}`))
+          } else {
+            setTimeout(check, 2000)
+          }
+        }
+      }
+      setTimeout(check, 2000)
+    })
+
+    directGenProgress.value = 100
+    directGenStatus.value = '完成'
+    directGenResult.value = pollResult
+    message.success(`测试用例生成完成，共 ${pollResult.scriptsCount || 0} 个脚本`)
+  } catch (error) {
+    directGenError.value = error.message || '未知错误'
+    directGenStatus.value = '失败'
+    message.error(`生成失败: ${error.message}`)
+  } finally {
+    directGenerating.value = false
+  }
+}
+
 const viewAnalysisDetail = () => {
   router.push({
     path: '/api-automation/analysis-detail',
-    query: { analysisId: analysisResult.value.analysisId }
+    query: { analysisId: analysisResult.value.analysisId },
   })
 }
 
@@ -1007,7 +1382,7 @@ const previewTestScripts = () => {
     query: {
       taskId,
       docId: uploadedFile.value?.docId,
-    }
+    },
   })
 }
 

@@ -331,6 +331,9 @@ class ScriptGenerationInput(BaseModel):
     dependencies: List[EndpointDependency] = Field(default_factory=list, description="依赖关系")  # 新增：依赖关系
     execution_groups: List[ExecutionGroup] = Field(default_factory=list, description="执行组")
     generation_options: Dict[str, Any] = Field(default_factory=dict, description="生成选项")
+    # 场景测试用例（chain-style）：非空时 ScriptGeneratorAgent 走 scenario 分支；
+    # 空时走原有 LLM/fallback 路径，老调用方零感知。
+    scenarios: List["ScenarioTestCase"] = Field(default_factory=list, description="场景测试用例")
 
 
 class GeneratedScript(BaseModel):
@@ -568,11 +571,9 @@ class AgentPrompts:
 
 ## 生成要求
 1. **测试用例设计**：
-   - 为每个端点生成多种类型的测试用例
+   # [NOTE] 只生成正向用例。如需恢复多类型（正向/负向/边界/安全），改回下面这行：
+   - 为每个端点生成正向测试用例
    - 正向测试：验证正常功能和业务流程
-   - 负向测试：验证错误处理和异常情况
-   - 边界测试：测试参数边界值和极限情况
-   - 安全测试：验证权限控制和数据验证
 
 2. **测试数据生成**：
    - 为每个测试用例生成合适的测试数据
@@ -809,7 +810,7 @@ def created_item(api_client):
 ## 生成规则
 
 ### 脚本结构（必须严格按此顺序）
-1. 文件头文档字符串（一行：模块名称 + "接口测试"）
+1. 文件头文档字符串（一行，用三个双引号包裹：模块名称接口测试）
 2. `import pytest`（仅此一行 import，禁止 import requests 等其他库）
 3. `pytestmark = [pytest.mark.模块标签, pytest.mark.api]`（模块标签从端点的 tags 提取）
 4. 如果 dependencies 不为空：定义 @pytest.fixture 链（仅用于步骤间传数据）
@@ -1005,3 +1006,45 @@ class TaskStatusUpdateResponse(BaseModel):
     interface_id: str = Field(..., description="接口ID")
     status: TaskStatus = Field(..., description="任务状态")
     updated_at: datetime = Field(default_factory=datetime.now, description="更新时间")
+
+
+# ============================================================================
+# 场景测试用例（chain-style）- 非破坏式扩展
+# 对应预分析依赖 JSON（如 asset-management-dependencies.json）里的 chains[].steps[]，
+# 让 ScriptGeneratorAgent 走"模板渲染"分支生成多步骤测试方法，绕过 LLM。
+# ============================================================================
+
+class ScenarioStepSpec(BaseModel):
+    """场景内的单个步骤 — 对应依赖 JSON 中 chains[].steps[]"""
+    step: int = Field(..., description="步骤序号（从 1 开始）")
+    purpose: str = Field("", description="步骤目的（中文描述）")
+    method: HttpMethod = Field(..., description="HTTP 方法")
+    path: str = Field(..., description="API 路径（含 :id 或 {id} 路径参数）")
+    path_params: Dict[str, Any] = Field(default_factory=dict, description="路径参数 {var_name: example_value}")
+    query: Dict[str, Any] = Field(default_factory=dict, description="query 参数模板")
+    body: Dict[str, Any] = Field(default_factory=dict, description="请求体模板")
+    body_shape: List[str] = Field(default_factory=list, description="bodyShape 标识（区分同 path 的多变体）")
+    response_example: Dict[str, Any] = Field(default_factory=dict, description="响应示例（用于生成默认断言）")
+    # 形如 {"asset_type": {"from": "step:1.dataOut.asset_type", "optional": false, "template": null}}
+    data_in: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="入参引用 → 前序步骤 dataOut")
+    # 形如 {"newAssetId": {"path": "response.data", "exampleValue": "..."}}
+    data_out: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="出参提取规则")
+    # 形如 {"find"|"notFind"|"every"|"equals": {"in": "response.data.list[]._id", "equalsRef": "step:4.dataOut.newAssetId"}}
+    assert_spec: Optional[Dict[str, Any]] = Field(None, description="断言规格")
+    depends_on: List[int] = Field(default_factory=list, description="依赖的前序步骤 step 序号")
+    related_endpoint_id: Optional[str] = Field(None, description="关联的 ParsedEndpoint.endpoint_id")
+    related_test_case_id: Optional[str] = Field(None, description="关联的 GeneratedTestCase.test_case_id")
+
+
+class ScenarioTestCase(BaseModel):
+    """场景测试用例 — 一个 chain ⇒ 一个测试方法"""
+    scenario_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="场景ID")
+    name: str = Field(..., description="场景名称（来自 chain.name）")
+    description: str = Field("", description="场景描述")
+    steps: List[ScenarioStepSpec] = Field(default_factory=list, description="顺序步骤列表")
+    tags: List[str] = Field(default_factory=list, description="标签（用于 pytest mark）")
+    primary_endpoint_id: Optional[str] = Field(None, description="主端点ID（用于 TestCase 入库时挂载）")
+
+
+# 解析 ScriptGenerationInput 上的前向引用 "ScenarioTestCase"
+ScriptGenerationInput.model_rebuild()
