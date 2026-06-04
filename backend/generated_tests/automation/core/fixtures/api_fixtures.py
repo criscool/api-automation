@@ -47,13 +47,14 @@ def login_session(auth_session):
     return auth_session
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def api_client(login_session):
     """
-    function 级 fixture：提供自动携带 authorization 的 BaseClient
+    session 级 fixture：提供自动携带 authorization 的 BaseClient
 
     依赖 login_session 确保登录已完成。
     BaseClient 内部从 AuthSession 自动读取 authorization。
+    使用 session 作用域以支持 module/session 级别的业务 fixture 复用。
 
     使用方式：
         def test_xxx(api_client):

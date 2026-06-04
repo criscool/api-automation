@@ -582,7 +582,7 @@ class ApiDataPersistenceAgent(BaseApiAutomationAgent):
                     await existing.save(using_db=conn)
                     logger.debug(f"更新 TestCase: {display_name} ({class_name}::{method_name})")
                 else:
-                    await TestCase.create(
+                    test_case = await TestCase.create(
                         test_id=tc.test_case_id,
                         document=document,
                         endpoint=api_interface,
@@ -608,6 +608,13 @@ class ApiDataPersistenceAgent(BaseApiAutomationAgent):
                         using_db=conn,
                     )
                     logger.debug(f"创建 TestCase: {display_name} ({class_name}::{method_name})")
+
+                    # 自动分类：按接口 path 匹配分类规则
+                    try:
+                        from app.services.api_automation.category_matcher import auto_assign_category
+                        await auto_assign_category(test_case, api_interface)
+                    except Exception as classify_err:
+                        logger.debug(f"自动分类跳过: {classify_err}")
 
             logger.info(f"TestCase 落库完成: 共处理 {len(message.test_cases or [])} 个用例")
         except Exception as e:

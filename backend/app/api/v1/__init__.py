@@ -13,7 +13,11 @@ from .endpoints.api_automation import router as api_automation_router
 from .endpoints.interface_management import router as interface_management_router
 from .endpoints.script_management import router as script_management_router
 from .endpoints.test_case_management import router as test_case_management_router
+from .endpoints.testcase_category_management import router as testcase_category_router
 from .endpoints.execution_reports import router as execution_reports_router
+
+from .endpoints.scheduled_tasks import router as scheduled_tasks_router
+
 
 v1_router = APIRouter()
 
@@ -28,4 +32,6 @@ v1_router.include_router(api_automation_router, prefix="/api-automation", tags=[
 v1_router.include_router(interface_management_router, prefix="/interface", tags=["接口管理"])
 v1_router.include_router(script_management_router, prefix="/scripts", tags=["脚本管理"])
 v1_router.include_router(test_case_management_router, prefix="/testcases", tags=["用例管理"])
+v1_router.include_router(testcase_category_router, prefix="/testcase-categories", tags=["用例分类"])
 v1_router.include_router(execution_reports_router, prefix="/execution-reports", tags=["执行报告"])
+v1_router.include_router(scheduled_tasks_router, prefix="/api-automation", tags=["定时任务"])

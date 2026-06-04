@@ -588,6 +588,7 @@ async def get_parse_status(session_id: str):
             endpoints_list = []
             for iface in interface_records:
                 endpoints_list.append({
+                    "endpoint_id": iface.interface_id,
                     "method": iface.method,
                     "path": iface.path,
                     "summary": iface.summary or iface.name,

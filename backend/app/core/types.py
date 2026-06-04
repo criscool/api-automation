@@ -16,6 +16,7 @@ class AgentTypes(Enum):
     TEST_SCRIPT_GENERATOR = "test_script_generator"
     TEST_EXECUTOR = "test_executor"
     LOG_RECORDER = "log_recorder"
+    CATEGORY_RULE_RECOMMENDER = "category_rule_recommender"
 
 
 class AgentPlatform(Enum):
@@ -101,6 +102,7 @@ AGENT_NAMES: Dict[str, str] = {
     AgentTypes.TEST_SCRIPT_GENERATOR.value: "测试脚本生成智能体",
     AgentTypes.TEST_EXECUTOR.value: "测试执行智能体",
     AgentTypes.LOG_RECORDER.value: "日志记录智能体",
+    AgentTypes.CATEGORY_RULE_RECOMMENDER.value: "分类规则推荐智能体",
 }
 
 

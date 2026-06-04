@@ -520,13 +520,14 @@
 <script setup>
 import { ref, computed, onMounted, h } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NTag, NRadioGroup, NRadio, NSpace, useMessage } from 'naive-ui'
+import { NButton, NTag, NRadioGroup, NRadio, NSpace, useMessage, useDialog } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import api from '@/api'
 import { formatTime, formatFileSize } from '@/utils'
 
 const router = useRouter()
 const message = useMessage()
+const dialog = useDialog()
 
 // 当前步骤
 const currentStep = ref(1)
@@ -713,7 +714,44 @@ const endpointColumns = [
     width: 80,
     render: (row) => (row.authRequired ? '是' : '否'),
   },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 80,
+    render(row) {
+      return h(NButton, {
+        size: 'tiny',
+        type: 'error',
+        onClick: () => deleteEndpoint(row),
+      }, {
+        default: () => '删除',
+        icon: () => h(Icon, { icon: 'mdi:delete' }),
+      })
+    },
+  },
 ]
+
+const deleteEndpoint = (row) => {
+  dialog.warning({
+    title: '确认删除',
+    content: `确定要删除接口 "${row.method} ${row.path}" 吗？`,
+    positiveText: '确定',
+    onPositiveClick: async () => {
+      try {
+        await api.deleteApiInterface(row.endpoint_id)
+        message.success('已删除')
+        const endpoints = parseResult.value?.endpoints
+        if (endpoints) {
+          const idx = endpoints.findIndex((e) => e.endpoint_id === row.endpoint_id)
+          if (idx !== -1) endpoints.splice(idx, 1)
+          parseResult.value.endpointsCount = endpoints.length
+        }
+      } catch (error) {
+        message.error('删除失败')
+      }
+    },
+  })
+}
 
 // 计算属性
 const schemaTreeData = computed(() => {

@@ -25,6 +25,13 @@ async def lifespan(app: FastAPI):
     # 初始化数据库和基础数据
     await init_data()
 
+    # 免删库增量迁移（新增表/列）
+    from app.models.api_automation import _ensure_migration_testcase_categories
+    await _ensure_migration_testcase_categories()
+
+    from app.models.api_automation import _ensure_migration_scheduled_tasks
+    await _ensure_migration_scheduled_tasks()
+
     # 初始化API自动化编排器
     try:
         from app.api.v1.endpoints.api_automation import initialize_orchestrator
@@ -64,7 +71,29 @@ async def lifespan(app: FastAPI):
         from loguru import logger
         logger.error(f"初始化 Marker PDF 服务失败: {str(e)}")
 
+    # 初始化定时任务调度器
+    try:
+        from app.services.api_automation.scheduled_task_service import get_scheduled_task_service
+        _scheduler = get_scheduled_task_service()
+        await asyncio.wait_for(_scheduler.start(), timeout=10)
+    except asyncio.TimeoutError:
+        from loguru import logger
+        logger.warning("初始化定时任务调度器超时，跳过")
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"初始化定时任务调度器失败: {str(e)}")
+
     yield
+
+    # 关闭定时任务调度器
+    try:
+        from app.services.api_automation.scheduled_task_service import get_scheduled_task_service
+        _scheduler = get_scheduled_task_service()
+        await _scheduler.shutdown()
+    except Exception as e:
+        from loguru import logger
+        logger.error(f"关闭定时任务调度器失败: {str(e)}")
+
     await Tortoise.close_connections()
 
 

@@ -75,6 +75,16 @@ export default {
       },
     },
     {
+      name: '用例管理',
+      path: 'testcase-management',
+      component: () => import('./testcase-management/index.vue'),
+      meta: {
+        title: '用例管理',
+        icon: 'mdi:file-tree',
+        description: '分层查看用例，按分类树管理测试用例',
+      },
+    },
+    {
       name: '测试执行',
       path: 'test-execution',
       component: () => import('./test-execution/index.vue'),

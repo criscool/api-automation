@@ -27,7 +27,7 @@
         </div>
         
         <n-space>
-          <n-button type="primary" @click="showCreateModal = true">
+          <n-button type="primary" @click="resetForm(); showTaskModal = true">
             <template #icon>
               <n-icon><Icon icon="mdi:plus" /></n-icon>
             </template>
@@ -62,7 +62,14 @@
           <n-input v-model:value="taskForm.taskName" placeholder="输入任务名称" />
         </n-form-item>
         
-        <n-form-item label="选择脚本" path="scriptIds" required>
+        <n-form-item label="选择模式" path="selectionMode" required>
+          <n-radio-group v-model:value="taskForm.selectionMode">
+            <n-radio value="scripts">按脚本选择</n-radio>
+            <n-radio value="categories">按分类选择</n-radio>
+          </n-radio-group>
+        </n-form-item>
+
+        <n-form-item v-if="taskForm.selectionMode === 'scripts'" label="选择脚本" path="scriptIds" required>
           <n-select
             v-model:value="taskForm.scriptIds"
             :options="scriptOptions"
@@ -71,7 +78,22 @@
             filterable
           />
         </n-form-item>
-        
+
+        <n-form-item v-if="taskForm.selectionMode === 'categories'" label="选择分类" path="categoryIds" required>
+          <n-tree
+            v-model:checked-keys="taskForm.categoryIds"
+            :data="categoryTreeData"
+            checkable
+            :default-expand-all="false"
+            block-node
+            label-field="name"
+            key-field="category_id"
+            children-field="children"
+            placeholder="选择用例分类（包含子分类）"
+            style="max-height: 200px; overflow: auto"
+          />
+        </n-form-item>
+
         <n-form-item label="执行环境" path="environment" required>
           <n-select v-model:value="taskForm.environment" :options="environmentOptions" />
         </n-form-item>
@@ -89,7 +111,7 @@
         <!-- Cron表达式配置 -->
         <div v-if="taskForm.scheduleType === 'cron'">
           <n-form-item label="Cron表达式" path="cronExpression" required>
-            <n-input v-model:value="taskForm.cronExpression" placeholder="0 0 2 * * ?" />
+            <n-input v-model:value="taskForm.cronExpression" placeholder="0 0 2 * * *" />
             <template #feedback>
               <div class="text-sm text-gray-500 mt-1">
                 格式: 秒 分 时 日 月 周 年(可选)
@@ -276,7 +298,6 @@ const filterStatus = ref('')
 
 // 模态框状态
 const showTaskModal = ref(false)
-const showCreateModal = ref(false)
 const showCronHelper = ref(false)
 const showHistoryModal = ref(false)
 const isEditing = ref(false)
@@ -285,9 +306,11 @@ const isEditing = ref(false)
 const taskForm = ref({
   taskName: '',
   scriptIds: [],
+  categoryIds: [],
+  selectionMode: 'scripts',
   environment: 'test',
   scheduleType: 'cron',
-  cronExpression: '0 0 2 * * ?',
+  cronExpression: '0 0 2 * * *',
   intervalValue: 1,
   intervalUnit: 'hours',
   firstExecutionTime: null,
@@ -308,7 +331,7 @@ const cronBuilder = ref({
   hour: '2',
   day: '*',
   month: '*',
-  week: '?'
+  week: '*'
 })
 
 // 状态
@@ -346,6 +369,8 @@ const intervalUnitOptions = [
 
 const scriptOptions = ref([])
 
+const categoryTreeData = ref([])
+
 // Cron选项
 const secondOptions = [
   { label: '每秒', value: '*' },
@@ -377,24 +402,24 @@ const monthOptions = [
 ]
 
 const weekOptions = [
-  { label: '不指定', value: '?' },
-  { label: '周日', value: '1' },
-  { label: '周一', value: '2' },
-  { label: '周二', value: '3' },
-  { label: '周三', value: '4' },
-  { label: '周四', value: '5' },
-  { label: '周五', value: '6' },
-  { label: '周六', value: '7' }
+  { label: '每天', value: '*' },
+  { label: '周日', value: '0' },
+  { label: '周一', value: '1' },
+  { label: '周二', value: '2' },
+  { label: '周三', value: '3' },
+  { label: '周四', value: '4' },
+  { label: '周五', value: '5' },
+  { label: '周六', value: '6' }
 ]
 
 // 常用Cron表达式
 const commonCronExpressions = [
-  { description: '每天凌晨2点执行', expression: '0 0 2 * * ?' },
-  { description: '每小时执行一次', expression: '0 0 * * * ?' },
-  { description: '每30分钟执行一次', expression: '0 */30 * * * ?' },
-  { description: '每周一凌晨2点执行', expression: '0 0 2 ? * MON' },
-  { description: '每月1号凌晨2点执行', expression: '0 0 2 1 * ?' },
-  { description: '工作日上午9点执行', expression: '0 0 9 ? * MON-FRI' }
+  { description: '每天凌晨2点执行', expression: '0 0 2 * * *' },
+  { description: '每小时执行一次', expression: '0 0 * * * *' },
+  { description: '每30分钟执行一次', expression: '0 */30 * * * *' },
+  { description: '每周一凌晨2点执行', expression: '0 0 2 * * 1' },
+  { description: '每月1号凌晨2点执行', expression: '0 0 2 1 * *' },
+  { description: '工作日上午9点执行', expression: '0 0 9 * * 1-5' }
 ]
 
 // 计算属性
@@ -522,13 +547,22 @@ const loadTasks = async () => {
 
 const loadScriptOptions = async () => {
   try {
-    const response = await api.getTestScripts({ status: 'ready' })
-    scriptOptions.value = response.data.items.map(script => ({
-      label: `${script.scriptName} (${script.endpointPath})`,
-      value: script.scriptId
+    const response = await api.getAllScripts({ is_active: true })
+    scriptOptions.value = (response.data.scripts || response.data.items || []).map(script => ({
+      label: script.name || script.scriptName,
+      value: script.script_id || script.scriptId,
     }))
   } catch (error) {
     message.error('加载脚本列表失败')
+  }
+}
+
+const loadCategoryTree = async () => {
+  try {
+    const response = await api.getCategoryTree()
+    categoryTreeData.value = response.data.tree || []
+  } catch (error) {
+    message.error('加载分类树失败')
   }
 }
 
@@ -614,9 +648,11 @@ const resetForm = () => {
   taskForm.value = {
     taskName: '',
     scriptIds: [],
+    categoryIds: [],
+    selectionMode: 'scripts',
     environment: 'test',
     scheduleType: 'cron',
-    cronExpression: '0 0 2 * * ?',
+    cronExpression: '0 0 2 * * *',
     intervalValue: 1,
     intervalUnit: 'hours',
     firstExecutionTime: null,
@@ -633,24 +669,10 @@ const resetForm = () => {
   selectedTask.value = null
 }
 
-// 监听新建模态框
-const handleCreateModal = (show) => {
-  if (show) {
-    resetForm()
-    showTaskModal.value = true
-  }
-  showCreateModal.value = false
-}
-
-// 监听新建按钮
-const handleCreateClick = () => {
-  showCreateModal.value = true
-  handleCreateModal(true)
-}
-
 onMounted(() => {
   loadTasks()
   loadScriptOptions()
+  loadCategoryTree()
 })
 </script>
 

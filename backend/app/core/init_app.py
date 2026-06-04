@@ -344,6 +344,45 @@ async def ensure_hidden_api_automation_menus():
                 await role.menus.add(menu_obj)
 
 
+async def ensure_new_api_automation_menus():
+    """幂等补全新菜单（用例管理等），并同步分配角色。"""
+    api_auto_menu = await Menu.filter(path="/api-automation", parent_id=0).first()
+    if not api_auto_menu:
+        return
+
+    new_menus = [
+        {
+            "name": "用例管理",
+            "path": "testcase-management",
+            "order": 5,
+            "icon": "mdi:file-tree",
+            "is_hidden": False,
+            "component": "/api-automation/testcase-management",
+        },
+    ]
+
+    for m in new_menus:
+        menu_obj = await Menu.filter(
+            parent_id=api_auto_menu.id, path=m["path"]
+        ).first()
+        if not menu_obj:
+            menu_obj = await Menu.create(
+                menu_type=MenuType.MENU,
+                name=m["name"],
+                path=m["path"],
+                order=m["order"],
+                parent_id=api_auto_menu.id,
+                icon=m["icon"],
+                is_hidden=m["is_hidden"],
+                component=m["component"],
+                keepalive=False,
+            )
+
+        for role in await Role.all():
+            if not await role.menus.filter(id=menu_obj.id).exists():
+                await role.menus.add(menu_obj)
+
+
 async def init_db():
     command = Command(tortoise_config=settings.TORTOISE_ORM)
     try:
@@ -398,5 +437,6 @@ async def init_data():
     await init_superuser()
     await init_menus()
     await ensure_hidden_api_automation_menus()
+    await ensure_new_api_automation_menus()
     await init_apis()
     await init_roles()

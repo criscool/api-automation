@@ -101,6 +101,18 @@ export default {
   deleteTestCase: (testId) => request.delete(`/testcases/${testId}`),
   runTestCase: (testId, data = {}) => request.post(`/testcases/${testId}/run`, data),
   executeTestCases: (data) => request.post('/testcases/execute', data),
+  moveTestCase: (testId, data) => request.put(`/testcases/${testId}/move`, data),
+  batchMoveTestCases: (data) => request.put('/testcases/batch-move', data),
+
+  // 用例分类管理API
+  getCategoryTree: (params = {}) => request.get('/testcase-categories/tree', { params }),
+  autoExtractCategories: (params = {}) => request.post('/testcase-categories/auto-extract', null, { params }),
+  createCategory: (data) => request.post('/testcase-categories', data),
+  updateCategory: (categoryId, data) => request.put(`/testcase-categories/${categoryId}`, data),
+  deleteCategory: (categoryId) => request.delete(`/testcase-categories/${categoryId}`),
+  recommendCategoryRules: (params) => request.post('/testcase-categories/recommend-rules', null, { params, timeout: 120000 }),
+  applyCategoryRecommendations: (data) => request.post('/testcase-categories/apply-recommendations', data),
+  autoClassifyTestCases: () => request.post('/testcase-categories/auto-classify'),
 
   // 原有接口管理（保持兼容）
   getApiEndpoints: (params = {}) => request.get('/api-automation/endpoints', { params }),

@@ -150,9 +150,9 @@ async def repair_test_case_mapping(
     cases_by_iface: Dict[str, List] = defaultdict(list)
     for tc in cases:
         if tc.endpoint:
-            cases_by_iface[tc.endpoint.interface_id].append(tc)
+            cases_by_iface[tc.endpoint.id].append(tc)  # 用整数 PK，匹配 TestScript.interface_id (FK)
 
-    # 批量查询脚本
+    # 批量查询脚本（按接口）
     scripts = await TestScript.filter(
         interface_id__in=list(cases_by_iface.keys()),
         is_active=True,
@@ -161,6 +161,30 @@ async def repair_test_case_mapping(
     scripts_by_iface: Dict[str, List[TestScript]] = defaultdict(list)
     for s in scripts:
         scripts_by_iface[s.interface_id].append(s)
+
+    # 对没有脚本的接口，按文档维度再查一次
+    orphan_iface_ids = [k for k in cases_by_iface if k not in scripts_by_iface]
+    if orphan_iface_ids:
+        # 收集这些接口对应的文档 ID
+        orphan_doc_ids = set()
+        for iface_id in orphan_iface_ids:
+            for tc in cases_by_iface[iface_id]:
+                if tc.document_id:
+                    orphan_doc_ids.add(tc.document_id)
+                    break
+        if orphan_doc_ids:
+            doc_scripts = await TestScript.filter(
+                document_id__in=list(orphan_doc_ids),
+                is_active=True,
+            ).using_db(conn)
+            for s in doc_scripts:
+                if s.interface_id not in scripts_by_iface:
+                    scripts_by_iface[s.interface_id].append(s)
+            # 把 doc 级脚本也分给孤儿接口
+            for iface_id in orphan_iface_ids:
+                for s in doc_scripts:
+                    if s.interface_id not in scripts_by_iface.get(iface_id, []):
+                        scripts_by_iface[iface_id].append(s)
 
     repaired = 0
     skipped = 0

@@ -82,6 +82,7 @@ dbutils==3.1.0
 # Marker PDF解析相关依赖
 # marker-pdf>=1.6.0  # 与 autogen-core 的 pillow 版本冲突，暂时禁用
 
+apscheduler==3.11.2
 pytest-json-report
 pytest-html
 pytest==8.3.5

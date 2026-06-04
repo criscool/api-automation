@@ -25,6 +25,7 @@ from app.models.api_automation import (
     TestExecution,
     TestScript,
     ScriptExecutionResult,
+    TestCaseCategory,
 )
 from app.core.enums import ExecutionStatus
 from app.api.v1.endpoints.script_management import _run_pytest_for_one_script
@@ -76,7 +77,7 @@ async def _ensure_script_file_on_disk(script_file_path: str, generated_tests_dir
     return target
 
 
-def _serialize_case_for_list(tc: TestCase) -> Dict[str, Any]:
+def _serialize_case_for_list(tc: TestCase, cat_map: dict = None) -> Dict[str, Any]:
     """列表行序列化：刚好够前端"脚本管理"页用的字段"""
     endpoint = tc.endpoint  # 已 prefetch
     interface_info: Dict[str, Any] = {}
@@ -92,6 +93,15 @@ def _serialize_case_for_list(tc: TestCase) -> Dict[str, Any]:
     if tc.script_file_path:
         script_file_name = Path(tc.script_file_path).name
 
+    category_info: Dict[str, Any] = {}
+    if cat_map:
+        cat = cat_map.get(tc.category_id)
+        if cat:
+            category_info = {
+                "category_id": cat.category_id,
+                "name": cat.name,
+            }
+
     return {
         "test_id": tc.test_id,
         "name": tc.name,
@@ -101,6 +111,7 @@ def _serialize_case_for_list(tc: TestCase) -> Dict[str, Any]:
         "priority": tc.priority.value if hasattr(tc.priority, "value") else str(tc.priority),
         "tags": tc.tags or [],
         "interface_info": interface_info,
+        "category_info": category_info,
         "script_file_name": script_file_name,
         "script_file_path": tc.script_file_path or "",
         "class_name": tc.class_name or "",
@@ -113,9 +124,9 @@ def _serialize_case_for_list(tc: TestCase) -> Dict[str, Any]:
     }
 
 
-def _serialize_case_for_detail(tc: TestCase) -> Dict[str, Any]:
+def _serialize_case_for_detail(tc: TestCase, cat_map: dict = None) -> Dict[str, Any]:
     """详情序列化：列表字段 + test_data/assertions/setup/teardown"""
-    data = _serialize_case_for_list(tc)
+    data = _serialize_case_for_list(tc, cat_map)
     data.update({
         "test_data": tc.test_data or [],
         "assertions": tc.assertions or [],
@@ -141,10 +152,12 @@ async def get_all_test_cases(
     document_id: Optional[str] = Query(None, description="文档ID筛选"),
     interface_id: Optional[str] = Query(None, description="接口ID筛选"),
     include_inactive: bool = Query(False, description="是否包含已删除"),
+    category_id: Optional[str] = Query(None, description="用例分类ID筛选（含子分类）"),
+    uncategorized: bool = Query(False, description="只返回未分类用例"),
 ):
     """分页查询用例"""
     try:
-        qs = TestCase.all().prefetch_related("endpoint", "document")
+        qs = TestCase.all().prefetch_related("endpoint", "document", "category")
 
         if not include_inactive:
             qs = qs.filter(is_active=True)
@@ -156,11 +169,24 @@ async def get_all_test_cases(
             qs = qs.filter(document__doc_id=document_id)
         if interface_id:
             qs = qs.filter(endpoint__interface_id=interface_id)
+        if uncategorized:
+            qs = qs.filter(category_id__isnull=True)
+        elif category_id:
+            cat_ids = await _get_category_subtree_ids(category_id)
+            if cat_ids:
+                qs = qs.filter(category_id__in=cat_ids)
 
         total = await qs.count()
         rows = await qs.order_by("-created_at").offset((page - 1) * page_size).limit(page_size)
 
-        items = [_serialize_case_for_list(tc) for tc in rows]
+        # 构建分类 lookup dict（绕过 Tortoise FK 同步访问问题）
+        cat_ids_in_result = {tc.category_id for tc in rows if tc.category_id}
+        cat_map = {}
+        if cat_ids_in_result:
+            cats = await TestCaseCategory.filter(id__in=list(cat_ids_in_result)).all()
+            cat_map = {c.id: c for c in cats}
+
+        items = [_serialize_case_for_list(tc, cat_map) for tc in rows]
 
         return {
             "code": 200,
@@ -187,10 +213,17 @@ async def get_test_case_detail(test_id: str):
         if not tc:
             raise HTTPException(status_code=404, detail=f"用例不存在: {test_id}")
 
+        # 构建分类 lookup
+        cat_map = {}
+        if tc.category_id:
+            cat = await TestCaseCategory.filter(id=tc.category_id).first()
+            if cat:
+                cat_map = {cat.id: cat}
+
         return {
             "code": 200,
             "msg": "OK",
-            "data": _serialize_case_for_detail(tc),
+            "data": _serialize_case_for_detail(tc, cat_map),
             "success": True,
         }
     except HTTPException:
@@ -600,3 +633,78 @@ async def _execute_test_cases_in_background(
                         await tc.save()
     except Exception as e:
         logger.error(f"用例执行落库失败 execution_id={execution_id}: {e}", exc_info=True)
+
+
+# ==================== 分类筛选辅助 + 用例移动 ====================
+
+async def _get_category_subtree_ids(category_id: str) -> list:
+    """递归获取指定分类及其所有子分类的数据库 id"""
+    cat = await TestCaseCategory.filter(category_id=category_id, is_active=True).first()
+    if not cat:
+        return []
+    ids = [cat.id]
+    children = await TestCaseCategory.filter(parent=cat, is_active=True).all()
+    for child in children:
+        child_ids = await _get_category_subtree_ids(child.category_id)
+        ids.extend(child_ids)
+    return ids
+
+
+class MoveTestCaseRequest(BaseModel):
+    test_id: str = Field(..., description="用例 test_id")
+    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出")
+
+
+class BatchMoveTestCaseRequest(BaseModel):
+    test_ids: List[str] = Field(..., description="用例 test_id 列表")
+    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出")
+
+
+@router.put("/{test_id}/move", summary="移动单条用例到分类")
+async def move_test_case(test_id: str, req: MoveTestCaseRequest):
+    try:
+        tc = await TestCase.filter(test_id=test_id, is_active=True).first()
+        if not tc:
+            raise HTTPException(status_code=404, detail="用例不存在")
+
+        if req.category_id:
+            cat = await TestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
+            if not cat:
+                raise HTTPException(status_code=404, detail="目标分类不存在")
+            tc.category = cat
+        else:
+            tc.category = None
+
+        await tc.save(update_fields=["category_id"])
+        return {"code": 200, "msg": "移动成功", "success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"移动用例失败: {e}")
+        raise HTTPException(status_code=500, detail=f"移动失败: {e}")
+
+
+@router.put("/batch-move", summary="批量移动用例")
+async def batch_move_test_cases(req: BatchMoveTestCaseRequest):
+    try:
+        cat = None
+        if req.category_id:
+            cat = await TestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
+            if not cat:
+                raise HTTPException(status_code=404, detail="目标分类不存在")
+
+        updated = await TestCase.filter(
+            test_id__in=req.test_ids, is_active=True
+        ).update(category=cat)
+
+        return {
+            "code": 200,
+            "msg": f"已移动 {updated} 条用例",
+            "data": {"moved": updated},
+            "success": True,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量移动用例失败: {e}")
+        raise HTTPException(status_code=500, detail=f"批量移动失败: {e}")
