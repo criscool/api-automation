@@ -1,0 +1,18 @@
+# ============================================================
+# 测试环境配置 (test)
+# ============================================================
+
+env: "test"
+
+api:
+  base_url: "https://172.16.8.190"
+  timeout: 30
+  verify_ssl: false
+
+auth:
+  type: "login"
+  username: "superadmin"
+  password: "Admin@123"
+
+logging:
+  level: "DEBUG"
