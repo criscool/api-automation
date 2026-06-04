@@ -66,7 +66,7 @@
                 </div>
                 
                 <n-space>
-                  <n-button size="small" @click="previewFile(file)">预览</n-button>
+                  <n-button size="small" @click="handlePreviewFile(file)">预览</n-button>
                   <n-button size="small" @click="editFile(file)">编辑</n-button>
                   <n-button size="small" @click="executeFile(file)" :loading="file.executing">执行</n-button>
                   <n-button size="small" @click="downloadFile(file)">下载</n-button>
@@ -313,7 +313,7 @@ const loadGenerationResult = async () => {
   }
 }
 
-const previewFile = async (file) => {
+const handlePreviewFile = async (file) => {
   try {
     const response = await api.getScriptContent({ 
       taskId: route.query.taskId,
