@@ -208,17 +208,19 @@ async def get_execution_logs(
 async def delete_execution_report(execution_id: str) -> dict:
     """删除执行报告"""
     try:
+        from app.models.api_automation import TestExecution
+
         service = ExecutionReportService()
-        
+
         # 删除报告文件
         report_dir = service.reports_dir / execution_id
         if report_dir.exists():
             import shutil
             shutil.rmtree(report_dir)
-        
-        # 这里可以选择是否删除数据库记录
-        # 通常只删除报告文件，保留执行记录
-        
+
+        # 删除数据库记录
+        await TestExecution.filter(execution_id=execution_id).delete()
+
         return success_response(
             data={
                 "execution_id": execution_id,
