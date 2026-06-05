@@ -25,6 +25,7 @@ Nginx (反向代理 + 静态资源)
 | 层 | 技术 | 说明 |
 |----|------|------|
 | 后端框架 | FastAPI + Uvicorn | 端口 9999，生产用 `run_prod.py` |
+| Python 包管理 | uv | 替代 pip + venv |
 | 数据库 | SQLite (aiosqlite) | 文件路径 `backend/db.sqlite3` |
 | 定时任务 | APScheduler 3.11.2 | 进程内 AsyncIOScheduler |
 | AI 框架 | AutoGen Core 0.6.4 | Topic 发布订阅模式 |
@@ -48,48 +49,110 @@ Nginx (反向代理 + 静态资源)
 
 ## 三、安装系统依赖
 
+### 3.1 换国内镜像源
+
 ```bash
-# === 更新系统 ===
+sudo cp /etc/apt/sources.list /etc/apt/sources.list.bak
+sudo sed -i 's|http://.*archive.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+sudo sed -i 's|http://.*security.ubuntu.com|http://mirrors.aliyun.com|g' /etc/apt/sources.list
+
+# 更新系统
 sudo apt update && sudo apt upgrade -y
+```
 
-# === 基础工具 ===
+> **检查**：`cat /etc/apt/sources.list | head -5`，应看到 `mirrors.aliyun.com`。
+
+### 3.2 基础工具
+
+```bash
 sudo apt install -y curl wget git vim build-essential unzip
+```
 
-# === Python 3.11+ ===
-# Ubuntu 22.04 默认 3.10，需要加 deadsnakes PPA
+> **检查**：`git --version && wget --version | head -1`，应显示版本号无报错。
+
+### 3.3 Python 3.11+
+
+```bash
+# Ubuntu 22.04（默认 3.10，需加 deadsnakes PPA）
 sudo apt install -y software-properties-common
 sudo add-apt-repository -y ppa:deadsnakes/ppa
-sudo apt install -y python3.11 python3.11-venv python3.11-dev
+sudo apt install -y python3.11 python3.11-dev
 
-# Ubuntu 24.04 默认 3.12，直接装
-# sudo apt install -y python3 python3-pip python3-venv python3-dev
+# Ubuntu 24.04（默认 3.12，无需 PPA）
+# sudo apt install -y python3 python3-dev
+```
 
-# === Node.js 20 LTS ===
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+> **检查**：`python3.11 --version`，应显示 `Python 3.11.x`。
+
+### 3.4 uv（Python 包管理器）
+
+```bash
+# 安装到系统路径，所有用户都能用
+wget -qO- https://astral.sh/uv/install.sh | sh
+sudo mv ~/.local/bin/uv /usr/local/bin/uv
+sudo mv ~/.local/bin/uvx /usr/local/bin/uvx 2>/dev/null
+
+# 配置国内镜像（对所有用户生效）
+echo 'export UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple' | sudo tee /etc/profile.d/uv-mirror.sh
+source /etc/profile.d/uv-mirror.sh
+```
+
+> **检查**：`uv --version`，应显示 `uv x.x.x`。
+>
+> 如果仍报 `command not found`，试 `ls /usr/local/bin/uv` 确认文件存在。
+
+### 3.5 Node.js 20 + npm/pnpm
+
+```bash
+wget -qO- https://mirrors.aliyun.com/nodejs-release/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 
-# === pnpm（前端包管理器，不要用 npm） ===
+npm config set registry https://registry.npmmirror.com
 npm install -g pnpm
-
-# === Allure CLI（测试报告生成） ===
-AL_VERSION=2.32.0
-wget https://github.com/allure-frameworks/allure2/releases/download/${AL_VERSION}/allure_${AL_VERSION}-1_all.deb
-sudo dpkg -i allure_${AL_VERSION}-1_all.deb
-sudo apt install -f -y   # 修复可能的依赖缺失
-
-# === Nginx ===
-sudo apt install -y nginx
-
-# === libmagic（python-magic 依赖） ===
-sudo apt install -y libmagic1
-
-# === 验证安装 ===
-python3.11 --version
-node --version
-pnpm --version
-allure --version
-nginx -v
+pnpm config set registry https://registry.npmmirror.com
 ```
+
+> **检查**：
+> ```bash
+> node --version    # 应显示 v20.x.x
+> pnpm --version    # 应显示版本号
+> npm config get registry   # 应显示 https://registry.npmmirror.com
+> pnpm config get registry  # 应显示 https://registry.npmmirror.com
+> ```
+
+### 3.6 Allure CLI（需要 Java 环境）
+
+首先要安装 Java，因为 Allure 2.x 是 Java 写的：
+
+```bash
+sudo apt install -y default-jre
+java -version
+```
+
+然后安装 Allure：
+
+```bash
+AL_VERSION=2.32.0
+wget https://gh.api.99988866.xyz/https://github.com/allure-frameworks/allure2/releases/download/${AL_VERSION}/allure_${AL_VERSION}-1_all.deb
+sudo dpkg -i allure_${AL_VERSION}-1_all.deb
+sudo apt install -f -y
+```
+
+> **检查**：`allure --version`，应显示 `2.32.0`。
+>
+> 如果 GitHub proxy 也超时，先在有科学上网的机器下载 deb 包再 scp 上传安装。
+
+### 3.7 Nginx + libmagic
+
+```bash
+sudo apt install -y nginx libmagic1
+```
+
+> **检查**：
+> ```bash
+> nginx -v                         # 应显示 nginx version: ...
+> systemctl is-active nginx        # 应显示 active
+> ```
 
 ---
 
@@ -99,6 +162,7 @@ nginx -v
 # 应用专用用户
 sudo useradd -m -s /bin/bash apiauto
 sudo usermod -aG www-data apiauto
+sudo usermod -aG sudo apiauto
 
 # 应用代码目录
 sudo mkdir -p /opt/api-automation
@@ -108,6 +172,13 @@ sudo chown -R apiauto:apiauto /opt/api-automation
 sudo mkdir -p /data/api-automation/{uploads,reports,logs,backups}
 sudo chown -R apiauto:apiauto /data/api-automation
 ```
+
+> **检查**：
+> ```bash
+> id apiauto                        # 应显示用户信息
+> ls -ld /opt/api-automation        # 应显示 owner=apiauto
+> ls -d /data/api-automation/*/     # 应列出 4 个子目录
+> ```
 
 ---
 
@@ -142,6 +213,13 @@ git fetch gitlab master
 git checkout -b master gitlab/master
 ```
 
+> **检查**：
+> ```bash
+> git log --oneline -3              # 应显示最近 3 条提交
+> ls backend/app/__init__.py        # 应看到后端入口文件
+> ls frontend/package.json          # 应看到前端 package.json
+> ```
+
 > **备选方案**：如果服务器无法直连内网 GitLab，从本机打包上传：
 > ```powershell
 > # Windows 本机执行
@@ -159,38 +237,40 @@ git checkout -b master gitlab/master
 
 ```bash
 cd /opt/api-automation/backend
-python3.11 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip setuptools wheel
+uv venv --python 3.11
 ```
+
+> **检查**：`ls .venv/bin/python`，应看到 python 可执行文件。
 
 ### 6.2 安装依赖
 
 ```bash
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
+
+> **检查**：`uv pip list | wc -l`，应显示 50+ 个包。关键包验证：
+> ```bash
+> uv pip list | grep -E "fastapi|tortoise|autogen|apscheduler|uvicorn"
+> ```
 
 ### 6.3 创建 `.env` 配置文件
 
 ```bash
 cat > /opt/api-automation/backend/.env << 'EOF'
-# ========== LLM 配置（必填） ==========
+# ========== LLM 配置（必填，替换为真实值） ==========
 LLM_API_KEY=sk-your-api-key-here
 LLM_BASE_URL=https://api.deepseek.com/v1
 LLM_MODEL=deepseek-chat
 
-# ========== 应用配置 ==========
-APP_NAME=API自动化测试系统
+# ========== 以下为可选配置，不写则用默认值 ==========
 DEBUG=false
-LOG_LEVEL=INFO
-
-# ========== 文件上传 ==========
-MAX_FILE_SIZE=52428800
 UPLOAD_DIR=/data/api-automation/uploads
 EOF
 ```
 
-> 注意：`LLM_API_KEY` 必须替换为真实有效的 API Key，否则所有智能体只能走 fallback 路径，测试用例生成质量大幅下降。
+> **检查**：`cat /opt/api-automation/backend/.env | head -3`，应显示已写入的内容。
+
+> **注意**：`LLM_API_KEY` 必须替换为真实有效的 API Key，否则所有智能体只能走 fallback 路径，测试用例生成质量大幅下降。
 
 ### 6.4 配置 generated_tests 环境变量
 
@@ -202,11 +282,15 @@ AES_IV=1234567812345678
 EOF
 ```
 
+> **检查**：`cat /opt/api-automation/backend/generated_tests/.env`，应看到 AES_KEY 和 AES_IV。
+
 ### 6.5 创建运行时目录
 
 ```bash
 mkdir -p /opt/api-automation/backend/{uploads,reports,logs,backups,migrations}
 ```
+
+> **检查**：`ls -d /opt/api-automation/backend/{uploads,reports,logs,backups,migrations}`，应列出 5 个目录。
 
 ### 6.6 创建生产环境启动文件
 
@@ -231,33 +315,63 @@ if __name__ == "__main__":
 EOF
 ```
 
-> production 只绑定 `127.0.0.1`，由 Nginx 反向代理对外暴露。
-> `workers` 参数不设，默认 1 个 worker，避免 APScheduler 多 worker 重复触发定时任务。
+> **检查**：`ls -l /opt/api-automation/backend/run_prod.py`，应看到文件存在。
 
-### 6.7 初始化数据库
+> 生产环境只绑定 `127.0.0.1`，由 Nginx 反向代理对外暴露。`workers` 不设（默认 1），避免 APScheduler 多 worker 重复触发定时任务。
+
+### 6.7 数据库：从本地上传（方案 B）
+
+数据库文件（`db.sqlite3`）不在 git 里，需要从本地传到服务器。
+
+**① 本地打包：**
+
+```powershell
+# Windows 本机 PowerShell 执行
+cd D:\code\api-automation\backend
+scp db.sqlite3 apiauto@<服务器IP>:/opt/api-automation/backend/
+```
+
+**② 服务器验证：**
 
 ```bash
-cd /opt/api-automation/backend
-source venv/bin/activate
+# 确认文件已上传
+ls -la /opt/api-automation/backend/db.sqlite3
 
-# 验证数据库初始化
-python -c "
-import asyncio
-from tortoise import Tortoise
-async def main():
-    await Tortoise.init(
-        db_url='sqlite:///opt/api-automation/backend/db.sqlite3',
-        modules={'models': ['app.models.api_automation']}
-    )
-    await Tortoise.generate_schemas(safe=True)
-    print('数据库初始化成功')
-asyncio.run(main())
+# 验证库内容（用 Python 代替 sqlite3 命令，无需额外安装）
+uv run python -c "
+import sqlite3
+conn = sqlite3.connect('/opt/api-automation/backend/db.sqlite3')
+tables = conn.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall()
+print('表数量:', len(tables), [t[0] for t in tables])
+conn.close()
 "
 ```
+
+> **注意**：首次启动时 Tortoise ORM 检测到表已存在就不会重建，同时 `init_data()` 会自动补上缺失的种子数据（菜单、角色等）。
+>
+> 如果选方案 A（从零开始），跳过上传步骤，直接启动服务即可，首次启动会自动建表。
+>
+> **`uploads/` 需要传吗？** 不传也能跑——已有的测试脚本在 `generated_tests/` 里，不依赖原始文档。但如果需要在服务器上重新解析文档生成新用例，则需同步上传：
+> ```powershell
+> scp -r D:\code\api-automation\backend\uploads\* apiauto@<服务器IP>:/opt/api-automation/backend/uploads/
+> ```
 
 ---
 
 ## 七、构建前端
+
+### 7.1 补充缺失的构建文件
+
+`frontend/build/` 目录未纳入 git，需要从本地传过去：
+
+```powershell
+# Windows 本机 PowerShell 执行
+scp -r D:\code\api-automation\frontend\build\* apiauto@<服务器IP>:/opt/api-automation/frontend/build/
+```
+
+> **检查**：服务器上 `ls /opt/api-automation/frontend/build/`，应看到 `utils.js`、`config`、`plugin`、`constant.js`。
+
+### 7.2 构建
 
 ```bash
 cd /opt/api-automation/frontend
@@ -276,6 +390,8 @@ pnpm install
 pnpm build
 ```
 
+> **检查**：`ls -l /opt/api-automation/frontend/dist/index.html`，应看到文件存在且大小 > 0。
+
 构建产物在 `frontend/dist/`。
 
 环境变量说明：
@@ -293,7 +409,7 @@ pnpm build
 sudo tee /etc/nginx/sites-available/api-automation << 'NGINX'
 server {
     listen 80;
-    server_name <替换为域名或IP>;
+    server_name 172.16.8.144;
 
     # 前端静态文件 (Vue SPA)
     root /opt/api-automation/frontend/dist;
@@ -349,6 +465,13 @@ sudo rm -f /etc/nginx/sites-enabled/default
 sudo nginx -t && sudo systemctl reload nginx
 ```
 
+> **检查**：
+> ```bash
+> nginx -t                              # 应显示 syntax is ok, test is successful
+> systemctl is-active nginx             # 应显示 active
+> curl -s http://127.0.0.1/ | head -5  # 应返回前端 HTML 内容
+> ```
+
 ---
 
 ## 九、配置 Systemd 服务
@@ -364,9 +487,9 @@ Type=simple
 User=apiauto
 Group=apiauto
 WorkingDirectory=/opt/api-automation/backend
-Environment="PATH=/opt/api-automation/backend/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PATH=/opt/api-automation/backend/.venv/bin:/usr/local/bin:/usr/bin:/bin"
 EnvironmentFile=/opt/api-automation/backend/.env
-ExecStart=/opt/api-automation/backend/venv/bin/python run_prod.py
+ExecStart=/opt/api-automation/backend/.venv/bin/python run_prod.py
 Restart=on-failure
 RestartSec=5
 
@@ -391,6 +514,13 @@ sudo systemctl start api-automation
 sudo journalctl -u api-automation -f
 ```
 
+> **检查**：
+> ```bash
+> systemctl is-active api-automation           # 应显示 active
+> sleep 3 && systemctl is-active api-automation  # 3 秒后再次确认，排除启动闪退
+> curl -s http://127.0.0.1:9999/api/openapi.json | head -3  # 应返回 JSON
+> ```
+
 ---
 
 ## 十、配置防火墙
@@ -403,6 +533,8 @@ sudo ufw enable
 
 sudo ufw status
 ```
+
+> **检查**：输出应包含 `Status: active`，且 22、80、443 端口均为 `ALLOW`。
 
 ---
 
@@ -417,6 +549,12 @@ sudo certbot --nginx -d <你的域名>
 # 证书会在过期前自动续期
 sudo systemctl status certbot.timer
 ```
+
+> **检查**：
+> ```bash
+> sudo certbot certificates              # 应显示已签发的证书信息
+> curl -s https://<你的域名>/ | head -5  # 应返回前端 HTML
+> ```
 
 ---
 
@@ -457,9 +595,7 @@ git pull gitlab master
 
 # 更新后端依赖（如有变更）
 cd backend
-source venv/bin/activate
-pip install -r requirements.txt
-deactivate
+uv pip install -r requirements.txt
 
 # 重新构建前端
 cd ../frontend
@@ -468,6 +604,8 @@ pnpm install && pnpm build
 # 重启后端服务
 sudo systemctl restart api-automation
 ```
+
+> **检查**：`systemctl is-active api-automation`，应显示 `active`。
 
 ### 查看日志
 
@@ -536,7 +674,7 @@ sudo journalctl -u api-automation --no-pager -n 200
 
 # 常见原因：
 # 1. .env 不存在或 LLM_API_KEY 无效 → 检查 /opt/api-automation/backend/.env
-# 2. Python 依赖缺失 → cd backend && source venv/bin/activate && pip install -r requirements.txt
+# 2. Python 依赖缺失 → cd backend && uv pip install -r requirements.txt
 # 3. 端口被占用 → sudo lsof -i :9999
 # 4. 数据库损坏 → 移走 db.sqlite3 重启（会重建，但种子数据需重新初始化）
 ```
@@ -581,7 +719,7 @@ sudo systemctl status api-automation
 | `/opt/api-automation/backend/.env` | 后端环境变量 |
 | `/opt/api-automation/backend/db.sqlite3` | SQLite 数据库 |
 | `/opt/api-automation/backend/run_prod.py` | 生产启动脚本 |
-| `/opt/api-automation/backend/venv/` | Python 虚拟环境 |
+| `/opt/api-automation/backend/.venv/` | Python 虚拟环境（uv 管理） |
 | `/opt/api-automation/backend/generated_tests/` | 测试脚本 + pytest 基础设施 |
 | `/opt/api-automation/frontend/dist/` | 前端构建产物 |
 | `/opt/api-automation/frontend/.env.production` | 前端生产环境变量 |

@@ -64,8 +64,8 @@ autogen-agentchat==0.6.4
 autogen-ext[openai]==0.6.4
 autogen-core==0.6.4
 pytest==8.3.5
-allure-pytest==2.13.2
-allure-python-commons~=2.13.2
+allure-pytest==2.13.5
+allure-python-commons~=2.13.5
 sse-starlette==2.4.1
 
 # PDF处理相关库
@@ -86,6 +86,3 @@ apscheduler==3.11.2
 pycryptodome
 pytest-json-report
 pytest-html
-pytest==8.3.5
-allure-pytest==2.13.2
-allure-python-commons~=2.13.2

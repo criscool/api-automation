@@ -5,12 +5,22 @@ import time
 @pytest.fixture
 def created_post_assetTag_getDefaultAssetTagList(api_client):
     """获取默认标签分组"""
-    resp = api_client.post('/api/plugins/com.andisec.plugins.assetbase/assetbase/assetTag/getDefaultAssetTagList', json={'body': {}})
+    resp = api_client.post('/api/plugins/com.andisec.plugins.assetbase/assetbase/assetTag/getDefaultAssetTagList', json={})
     assert resp.status_code == 200
     data = resp.json()
     assert 'data' in data
-    resource_id = data['data'].get('id') or data['data'].get('session_id')
-    assert resource_id is not None
+    
+    # 兼容处理：后端返回 data['data'] 可能是列表（分组列表）
+    target_data = data['data']
+    if isinstance(target_data, list) and len(target_data) > 0:
+        # 提取第一个分组（通常是“业务”或“环境”）的 ID
+        resource_id = target_data[0].get('_id') or target_data[0].get('id')
+    elif isinstance(target_data, dict):
+        resource_id = target_data.get('id') or target_data.get('session_id')
+    else:
+        resource_id = None
+        
+    assert resource_id is not None, f"无法从响应中提取有效的 ID: {data}"
     return resource_id
 
 @pytest.fixture
