@@ -111,7 +111,7 @@
                 <n-dropdown trigger="click" :options="batchMoveOptions" @select="onBatchMoveSelect">
                   <n-button size="small">移动到...</n-button>
                 </n-dropdown>
-                <n-button size="small" type="primary" @click="batchExecute">批量执行</n-button>
+                <n-button size="small" type="primary" @click="batchExecute" :disabled="batchExecuting" :loading="batchExecuting">批量执行</n-button>
               </n-space>
             </div>
           </template>
@@ -878,12 +878,15 @@ const runSingle = async (testId) => {
   } catch { message.error('执行失败') }
 }
 
+const batchExecuting = ref(false)
+
 const batchExecute = async () => {
+  batchExecuting.value = true
   try {
     await api.executeTestCases({ test_ids: selectedIds.value })
     message.success(`已触发批量执行 ${selectedIds.value.length} 条用例`)
     selectedIds.value = []
-  } catch { message.error('批量执行失败') }
+  } catch { message.error('批量执行失败') } finally { batchExecuting.value = false }
 }
 
 // ==================== 初始化 ====================

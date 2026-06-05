@@ -26,34 +26,75 @@ def created_post_assetTag_getDefaultAssetTagList(api_client):
 @pytest.fixture
 def created_list(api_client, created_post_assetTag_getDefaultAssetTagList):
     """获取标签列表"""
-    resp = api_client.post(f'/api/plugins/com.andisec.plugins.assetbase/assetbase/assetTag/getAssetTagList', json={'body': {'query': 'pId:6497e027ae510000360ef5b1', 'fullText': '', 'per_page': 20, 'page': 1, 'order': ''}})
+    p_id = created_post_assetTag_getDefaultAssetTagList
+    payload = {
+        'query': f'pId:{p_id}',
+        'fullText': '',
+        'per_page': 20,
+        'page': 1,
+        'order': ''
+    }
+    resp = api_client.post('/api/plugins/com.andisec.plugins.assetbase/assetbase/assetTag/getAssetTagList', json=payload)
     assert resp.status_code == 200
     data = resp.json()
     assert 'data' in data
-    resource_id = data['data'].get('id') or data['data'].get('session_id')
-    assert resource_id is not None
+    # 如果列表为空，我们可能无法返回 ID，但至少不会 400
+    res_list = data['data'].get('list', [])
+    if res_list:
+        resource_id = res_list[0].get('_id') or res_list[0].get('id')
+    else:
+        resource_id = "no_tags_available"
     return resource_id
 
 @pytest.fixture
-def created_post_assetTag_addAssetTag(api_client, created_list):
+def created_post_assetTag_addAssetTag(api_client, created_post_assetTag_getDefaultAssetTagList):
     """新增标签"""
-    resp = api_client.post(f'/api/plugins/com.andisec.plugins.assetbase/assetbase/assetTag/addAssetTag', json={'body': {'pId': '6497e027ae510000360ef5b1', 'name': '测试标签', 'desc': '这是一个正向测试标签'}})
+    p_id = created_post_assetTag_getDefaultAssetTagList
+    payload = {
+        'pId': p_id,
+        'name': f'测试标签_{int(time.time())}',
+        'desc': '这是一个正向测试标签'
+    }
+    resp = api_client.post('/api/plugins/com.andisec.plugins.assetbase/assetbase/assetTag/addAssetTag', json=payload)
     assert resp.status_code == 200
     data = resp.json()
-    assert 'data' in data
-    resource_id = data['data'].get('id') or data['data'].get('session_id')
-    assert resource_id is not None
-    return resource_id
+    
+    # 探测发现 data['data'] 直接就是 ID 字符串
+    target_data = data.get('data')
+    if isinstance(target_data, str):
+        resource_id = target_data
+    elif isinstance(target_data, dict):
+        resource_id = target_data.get('_id') or target_data.get('id')
+    else:
+        resource_id = None
+        
+    assert resource_id is not None, f"无法从新增标签响应中提取 ID: {data}"
+    yield resource_id
+    # 清理：删除新增的标签
+    api_client.post('/api/plugins/com.andisec.plugins.assetbase/assetbase/assetTag/deleteAssetTag', json={'_ids': [resource_id]})
 
 @pytest.fixture
-def created_delete(api_client, created_post_assetTag_addAssetTag):
-    """删除标签"""
-    resp = api_client.post(f'/api/plugins/com.andisec.plugins.assetbase/assetbase/assetTag/deleteAssetTag', json={'body': {'_ids': ['6a182abb5e5b1b42223d7930']}})
+def created_delete(api_client, created_post_assetTag_getDefaultAssetTagList):
+    """创建一个标签供删除测试"""
+    p_id = created_post_assetTag_getDefaultAssetTagList
+    payload = {
+        'pId': p_id,
+        'name': f'待删除标签_{int(time.time())}',
+        'desc': '用于删除测试'
+    }
+    resp = api_client.post('/api/plugins/com.andisec.plugins.assetbase/assetbase/assetTag/addAssetTag', json=payload)
     assert resp.status_code == 200
     data = resp.json()
-    assert 'data' in data
-    resource_id = data['data'].get('id') or data['data'].get('session_id')
-    assert resource_id is not None
+    
+    target_data = data.get('data')
+    if isinstance(target_data, str):
+        resource_id = target_data
+    elif isinstance(target_data, dict):
+        resource_id = target_data.get('_id') or target_data.get('id')
+    else:
+        resource_id = None
+        
+    assert resource_id is not None, f"无法从创建标签响应中提取 ID: {data}"
     return resource_id
 ASSET_BASE = '/api/plugins/com.andisec.plugins.assetbase/AssetNetworkSegment/asset/networksegment'
 

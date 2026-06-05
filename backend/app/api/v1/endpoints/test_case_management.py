@@ -633,6 +633,17 @@ async def _execute_test_cases_in_background(
                         await tc.save()
     except Exception as e:
         logger.error(f"用例执行落库失败 execution_id={execution_id}: {e}", exc_info=True)
+        # 兜底：即使落库失败也把执行记录标记为失败，避免永久卡在 RUNNING
+        from datetime import datetime as dt
+        try:
+            test_execution = await TestExecution.filter(execution_id=execution_id).first()
+            if test_execution and test_execution.status == ExecutionStatus.RUNNING:
+                test_execution.status = ExecutionStatus.FAILED
+                test_execution.end_time = dt.now()
+                test_execution.error_message = str(e)[:1000]
+                await test_execution.save()
+        except Exception:
+            pass
 
 
 # ==================== 分类筛选辅助 + 用例移动 ====================
