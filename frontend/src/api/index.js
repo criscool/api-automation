@@ -178,4 +178,12 @@ export default {
   exportExecutionReport: (executionId, format = 'json') => request.get(`/execution-reports/${executionId}/export`, { params: { format } }),
   shareExecutionReport: (executionId) => request.post(`/execution-reports/${executionId}/share`),
   getSharedReport: (shareToken) => request.get(`/execution-reports/shared/${shareToken}`),
+
+  // 平台文档管理（首页说明文档）
+  getDocs: (params = {}) => request.get('/docs', { params }),
+  getDocDetail: (filename) => request.get(`/docs/${filename}`),
+  uploadDoc: (formData) => request.post('/docs/upload', formData, { headers: { 'Content-Type': 'multipart/form-data' } }),
+  deleteDoc: (filename) => request.delete(`/docs/${filename}`),
+  pinDoc: (filename) => request.post(`/docs/${filename}/pin`),
+  unpinDoc: (filename) => request.post(`/docs/${filename}/unpin`),
 }

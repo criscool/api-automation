@@ -16,6 +16,7 @@ from .endpoints.test_case_management import router as test_case_management_route
 from .endpoints.testcase_category_management import router as testcase_category_router
 from .endpoints.execution_reports import router as execution_reports_router
 
+from .endpoints.docs import router as docs_router
 from .endpoints.scheduled_tasks import router as scheduled_tasks_router
 
 
@@ -34,4 +35,5 @@ v1_router.include_router(script_management_router, prefix="/scripts", tags=["脚
 v1_router.include_router(test_case_management_router, prefix="/testcases", tags=["用例管理"])
 v1_router.include_router(testcase_category_router, prefix="/testcase-categories", tags=["用例分类"])
 v1_router.include_router(execution_reports_router, prefix="/execution-reports", tags=["执行报告"])
+v1_router.include_router(docs_router, prefix="/docs", tags=["文档管理"])
 v1_router.include_router(scheduled_tasks_router, prefix="/api-automation", tags=["定时任务"])

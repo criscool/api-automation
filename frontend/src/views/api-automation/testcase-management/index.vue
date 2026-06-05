@@ -47,12 +47,13 @@
             <template #icon><n-icon><Icon icon="mdi:refresh" /></n-icon></template>
             刷新
           </n-button>
-          <n-dropdown trigger="click" :options="classifyActionOptions" @select="onClassifyAction">
+          <!-- 智能分类功能暂时禁用，目前不太好用 -->
+          <!-- <n-dropdown trigger="click" :options="classifyActionOptions" @select="onClassifyAction">
             <n-button type="warning">
               <template #icon><n-icon><Icon icon="mdi:magic" /></n-icon></template>
               智能分类 ▾
             </n-button>
-          </n-dropdown>
+          </n-dropdown> -->
         </n-space>
       </div>
     </n-card>

@@ -520,6 +520,12 @@ const loadReports = async () => {
         createdAt: item.created_at,
       }))
       pagination.value.itemCount = response.data.total
+      // 删除最后一页最后一条后自动跳回上一页
+      if (reports.value.length === 0 && pagination.value.itemCount > 0) {
+        const maxPage = Math.ceil(pagination.value.itemCount / pagination.value.pageSize)
+        pagination.value.page = Math.min(pagination.value.page, maxPage)
+        return loadReports()
+      }
     }
   } catch (error) {
     message.error('加载执行报告失败')
