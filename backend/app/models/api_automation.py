@@ -155,6 +155,10 @@ class TestCase(Model):
     method_name = fields.CharField(max_length=255, null=True, description="pytest 测试方法名")
     script_file_path = fields.CharField(max_length=500, null=True, description="所在脚本文件路径（相对 generated_tests 目录）")
 
+    # 场景子用例的步骤摘要（含 method/path/purpose/data_in/data_out/assert_spec）。
+    # 仅 scenario 分支落库时填充；普通用例为空 dict，前端 derive 摘要时回退到 endpoint+assertions
+    scenario_step = fields.JSONField(default=dict, description="场景步骤摘要")
+
     # 生成元信息
     generated_by = fields.CharField(max_length=50, default="AI", description="生成方式")  # AI / MANUAL
     generation_session_id = fields.CharField(max_length=100, null=True, description="生成会话ID", index=True)
@@ -477,6 +481,17 @@ class TestScript(BaseModel, TimestampMixin):
     # 状态管理
     is_active = fields.BooleanField(default=True, description="是否激活")
 
+    # 执行流摘要：列表展示用，统一结构 {kind, step_count, assertion_count, primary_action, steps[], assertions[]}
+    flow_summary = fields.JSONField(default=dict, description="脚本执行流摘要（步骤+断言）")
+
+    # AI 智能修复相关
+    content_backup = fields.TextField(null=True, description="应用补丁前的脚本完整内容（用于回滚）")
+    heal_attempts = fields.IntField(default=0, description="累计 AI 修复尝试次数")
+    heal_failed_count = fields.IntField(default=0, description="连续验证失败次数（熔断用）")
+    last_heal_at = fields.DatetimeField(null=True, description="最后一次修复尝试时间")
+    last_heal_status = fields.CharField(max_length=32, null=True, description="最后一次修复状态(APPLIED/VERIFIED_PASS/VERIFIED_FAIL/ROLLED_BACK/ERROR)")
+    last_heal_session_id = fields.CharField(max_length=64, null=True, description="最后一次关联的诊断会话ID")
+
     class Meta:
         table = "test_scripts"
         table_description = "测试脚本表 - 优化版"
@@ -547,6 +562,48 @@ async def _ensure_migration_testcase_categories():
         await conn.execute_script("""
             ALTER TABLE testcase_categories ADD COLUMN match_rule VARCHAR(500);
         """)
+
+
+async def _ensure_migration_scenario_step():
+    """免删库增量迁移：test_cases 表新增 scenario_step 列"""
+    from tortoise import connections
+    conn = connections.get("default")
+    try:
+        await conn.execute_query("SELECT scenario_step FROM test_cases LIMIT 1")
+    except Exception:
+        await conn.execute_script("""
+            ALTER TABLE test_cases ADD COLUMN scenario_step TEXT NOT NULL DEFAULT '{}';
+        """)
+
+
+async def _ensure_migration_flow_summary():
+    """免删库增量迁移：test_scripts 表新增 flow_summary 列"""
+    from tortoise import connections
+    conn = connections.get("default")
+    try:
+        await conn.execute_query("SELECT flow_summary FROM test_scripts LIMIT 1")
+    except Exception:
+        await conn.execute_script("""
+            ALTER TABLE test_scripts ADD COLUMN flow_summary TEXT NOT NULL DEFAULT '{}';
+        """)
+
+
+async def _ensure_migration_test_script_heal_fields():
+    """免删库增量迁移：test_scripts 表新增 AI 智能修复相关字段"""
+    from tortoise import connections
+    conn = connections.get("default")
+    for field, ddl in [
+        ("content_backup", "ALTER TABLE test_scripts ADD COLUMN content_backup TEXT"),
+        ("heal_attempts", "ALTER TABLE test_scripts ADD COLUMN heal_attempts INT NOT NULL DEFAULT 0"),
+        ("heal_failed_count", "ALTER TABLE test_scripts ADD COLUMN heal_failed_count INT NOT NULL DEFAULT 0"),
+        ("last_heal_at", "ALTER TABLE test_scripts ADD COLUMN last_heal_at TIMESTAMP"),
+        ("last_heal_status", "ALTER TABLE test_scripts ADD COLUMN last_heal_status VARCHAR(32)"),
+        ("last_heal_session_id", "ALTER TABLE test_scripts ADD COLUMN last_heal_session_id VARCHAR(64)"),
+    ]:
+        try:
+            await conn.execute_query(f"SELECT {field} FROM test_scripts LIMIT 1")
+        except Exception:
+            await conn.execute_script(ddl)
 
 
 class AlertRule(Model):

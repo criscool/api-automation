@@ -372,6 +372,9 @@ class ScriptPersistenceInput(BaseModel):
     # 用例和端点信息（用于落库 TestCase 表并计算展示名）
     test_cases: List[GeneratedTestCase] = Field(default_factory=list, description="测试用例列表")
     endpoints: List[ParsedEndpoint] = Field(default_factory=list, description="端点列表")
+    # 场景测试用例：scenario 子用例落库时按 tags[scenario:xxx]+priority(step_no) 回查 ScenarioStepSpec
+    # 写入 TestCase.scenario_step。非 scenario 场景为空，老调用方无感
+    scenarios: List["ScenarioTestCase"] = Field(default_factory=list, description="场景测试用例")
     config_files: Dict[str, str] = Field(default_factory=dict, description="配置文件")
     requirements_txt: str = Field("", description="依赖文件内容")
     readme_content: str = Field("", description="README内容")
@@ -1046,5 +1049,6 @@ class ScenarioTestCase(BaseModel):
     primary_endpoint_id: Optional[str] = Field(None, description="主端点ID（用于 TestCase 入库时挂载）")
 
 
-# 解析 ScriptGenerationInput 上的前向引用 "ScenarioTestCase"
+# 解析 ScriptGenerationInput / ScriptPersistenceInput 上的前向引用 "ScenarioTestCase"
 ScriptGenerationInput.model_rebuild()
+ScriptPersistenceInput.model_rebuild()

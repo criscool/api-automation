@@ -194,3 +194,13 @@ backend/接口自动化测试平台.md
 backend/api-capture-backend-requirement.md
 *.bak.*
 *.bak1
+
+# 旁路子项目：UI 自动化 POC（独立仓库，不进 api-automation）
+ui-automation/*
+
+# 临时输出目录
+outputs/
+
+ AGENTS.md
+
+ docs/ai-test-healer-design.md

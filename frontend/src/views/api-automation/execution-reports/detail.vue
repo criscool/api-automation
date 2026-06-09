@@ -335,15 +335,22 @@
         />
       </div>
     </n-modal>
+
+    <!-- AI 诊断抽屉 -->
+    <ai-diagnosis-drawer
+      v-model:show="showAiDrawer"
+      :script-id="aiDrawerScriptId"
+      :script-name="aiDrawerScriptName"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, computed, watch } from 'vue'
+import { ref, onMounted, computed, watch, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Icon } from '@iconify/vue'
-import { useMessage } from 'naive-ui'
-import { 
+import { NButton, NIcon, NTag, useMessage } from 'naive-ui'
+import {
   getExecutionReportDetail,
   getExecutionLogs,
   generateExecutionReport,
@@ -353,6 +360,7 @@ import {
   getReportDownloadUrl
 } from '@/api/execution-reports'
 import { formatTime, formatFileSize } from '@/utils'
+import AiDiagnosisDrawer from './AiDiagnosisDrawer.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -373,6 +381,20 @@ const logsLoading = ref(false)
 const generatingReport = ref(false)
 const showPreviewModal = ref(false)
 const activeTab = ref('basic')
+
+// AI 诊断抽屉
+const showAiDrawer = ref(false)
+const aiDrawerScriptId = ref('')
+const aiDrawerScriptName = ref('')
+const openAiDiagnose = (row) => {
+  if (!row?.scriptId) {
+    message.warning('该脚本缺少 scriptId，无法发起 AI 诊断')
+    return
+  }
+  aiDrawerScriptId.value = row.scriptId
+  aiDrawerScriptName.value = row.scriptName || ''
+  showAiDrawer.value = true
+}
 
 // 计算属性
 const filteredScriptResults = computed(() => {
@@ -433,7 +455,7 @@ const scriptResultColumns = [
     render: (row) => {
       const type = getStatusType(row.status)
       const text = getStatusText(row.status)
-      return h('n-tag', { type }, text)
+      return h(NTag, { type }, { default: () => text })
     }
   },
   { title: '总测试', key: 'totalTests', width: 80 },
@@ -443,7 +465,30 @@ const scriptResultColumns = [
   { title: '成功率', key: 'successRate', width: 100, render: (row) => `${row.successRate.toFixed(1)}%` },
   { title: '执行时间', key: 'duration', width: 100, render: (row) => `${row.duration}s` },
   { title: '响应时间', key: 'responseTime', width: 100, render: (row) => `${row.responseTime}ms` },
-  { title: '错误信息', key: 'errorMessage', ellipsis: true }
+  { title: '错误信息', key: 'errorMessage', ellipsis: true },
+  {
+    title: '操作',
+    key: 'actions',
+    width: 130,
+    fixed: 'right',
+    render: (row) => {
+      const isFailed = row.status === 'FAILED' || (row.failedTests || 0) > 0
+      if (!isFailed) return null
+      return h(
+        NButton,
+        {
+          size: 'small',
+          type: 'warning',
+          ghost: true,
+          onClick: () => openAiDiagnose(row),
+        },
+        {
+          icon: () => h(NIcon, null, { default: () => h(Icon, { icon: 'mdi:robot-outline' }) }),
+          default: () => 'AI 诊断',
+        }
+      )
+    }
+  }
 ]
 
 // 方法

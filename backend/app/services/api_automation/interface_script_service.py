@@ -115,6 +115,7 @@ class InterfaceScriptService:
                         "doc_id": script.document.doc_id if script.document else None,
                         "file_name": script.document.file_name if script.document else None
                     } if script.document else None,
+                    "flow_summary": script.flow_summary or {},
                     "created_at": script.created_at,
                     "updated_at": script.updated_at
                 }
@@ -173,6 +174,7 @@ class InterfaceScriptService:
                     "code_quality_score": script.code_quality_score,
                     "test_coverage_score": script.test_coverage_score,
                     "complexity_score": script.complexity_score,
+                    "flow_summary": script.flow_summary or {},
                     "created_at": script.created_at,
                     "updated_at": script.updated_at
                 }
@@ -238,6 +240,7 @@ class InterfaceScriptService:
                     "file_name": script.document.file_name,
                     "api_title": script.document.api_info.get("title", "")
                 } if script.document else None,
+                "flow_summary": script.flow_summary or {},
                 "created_at": script.created_at,
                 "updated_at": script.updated_at
             }

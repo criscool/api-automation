@@ -510,6 +510,121 @@ class ApiDataPersistenceAgent(BaseApiAutomationAgent):
             return {1: Priority.P0, 2: Priority.P1, 3: Priority.P2, 4: Priority.P3}.get(p, Priority.P2)
         return Priority.P2
 
+    @staticmethod
+    def _extract_assert_items(assert_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """ScenarioStepSpec.assert_spec → 紧凑断言列表。每个 kind 子键 → 一条。"""
+        if not isinstance(assert_spec, dict):
+            return []
+        items: List[Dict[str, Any]] = []
+        for kind, spec in assert_spec.items():
+            if not isinstance(spec, dict):
+                continue
+            in_path = spec.get("in") or spec.get("path") or ""
+            expected: Dict[str, Any] = {}
+            for k in ("equalsRef", "findRef", "notFindRef", "everyRef", "neqRef",
+                      "gteRef", "lteRef", "gtRef", "ltRef"):
+                if k in spec:
+                    expected = {"ref": spec[k]}
+                    break
+            if not expected:
+                for k in ("equalsValue", "findValue", "notFindValue", "everyValue",
+                          "gteValue", "lteValue", "gtValue", "ltValue", "neqValue",
+                          "equals", "value"):
+                    if k in spec:
+                        expected = {"value": spec[k]}
+                        break
+            items.append({"kind": kind, "in": in_path, "expected": expected})
+        return items
+
+    @classmethod
+    def _build_scenario_flow_summary(cls, sc) -> Dict[str, Any]:
+        """ScenarioTestCase → flow_summary（scenario 类型）"""
+        steps_out: List[Dict[str, Any]] = []
+        asserts_out: List[Dict[str, Any]] = []
+        for step in (sc.steps or []):
+            method = step.method.value if hasattr(step.method, "value") else str(step.method)
+            steps_out.append({
+                "no": int(step.step),
+                "method": method,
+                "path": str(step.path or ""),
+                "purpose": str(step.purpose or ""),
+            })
+            for item in cls._extract_assert_items(step.assert_spec or {}):
+                item["step_no"] = int(step.step)
+                asserts_out.append(item)
+        primary_action = ""
+        if steps_out:
+            first = steps_out[0]
+            primary_action = f"[{first['no']}] {first['method']} {first['path']}"
+            if first['purpose']:
+                primary_action += f" · {first['purpose']}"
+        return {
+            "kind": "scenario",
+            "chain_name": str(sc.name or ""),
+            "step_count": len(steps_out),
+            "assertion_count": len(asserts_out),
+            "primary_action": primary_action,
+            "steps": steps_out,
+            "assertions": asserts_out,
+        }
+
+    @staticmethod
+    def _build_single_flow_summary(cases: List[Any], interface: ApiInterface) -> Dict[str, Any]:
+        """普通脚本 → flow_summary（single 类型）：聚合该脚本下所有用例的断言。"""
+        method = interface.method.value if hasattr(interface.method, "value") else str(interface.method)
+        path = str(interface.path or "")
+        asserts_out: List[Dict[str, Any]] = []
+        for c in cases:
+            for a in (getattr(c, "assertions", None) or []):
+                if hasattr(a, "model_dump"):
+                    a_dict = a.model_dump()
+                elif isinstance(a, dict):
+                    a_dict = a
+                else:
+                    continue
+                asserts_out.append({
+                    "kind": str(a_dict.get("comparison_operator") or "equals"),
+                    "in": str(a_dict.get("assertion_type") or ""),
+                    "expected": {"value": a_dict.get("expected_value")},
+                    "desc": str(a_dict.get("description") or ""),
+                })
+        return {
+            "kind": "single",
+            "chain_name": None,
+            "step_count": 1,
+            "assertion_count": len(asserts_out),
+            "primary_action": f"{method} {path}".strip(),
+            "steps": [{"no": 1, "method": method, "path": path, "purpose": ""}],
+            "assertions": asserts_out,
+        }
+
+    @classmethod
+    def _build_script_flow_summary(
+        cls,
+        script,
+        interface: ApiInterface,
+        message: "ScriptPersistenceInput",
+    ) -> Dict[str, Any]:
+        """根据脚本封装的 case 集合决定 flow_summary 类型。
+
+        - 命中 scenario：steps/assertions 来自整条 chain
+        - 普通脚本：从该脚本下所有用例的 assertions 聚合，steps=1
+        """
+        case_ids = set((script.case_method_map or {}).keys())
+        cases_by_id = {c.test_case_id: c for c in (message.test_cases or [])}
+        related_cases = [cases_by_id[cid] for cid in case_ids if cid in cases_by_id]
+
+        scenarios_by_name = {sc.name: sc for sc in (getattr(message, "scenarios", None) or [])}
+        for c in related_cases:
+            for tag in (getattr(c, "tags", None) or []):
+                if isinstance(tag, str) and tag.startswith("scenario:"):
+                    chain_name = tag[len("scenario:"):]
+                    sc = scenarios_by_name.get(chain_name)
+                    if sc:
+                        return cls._build_scenario_flow_summary(sc)
+
+        return cls._build_single_flow_summary(related_cases, interface)
+
     async def _store_test_cases(
         self,
         message: ScriptPersistenceInput,
@@ -659,6 +774,9 @@ class ApiDataPersistenceAgent(BaseApiAutomationAgent):
             existing_script.is_executable = True
             existing_script.is_active = True
 
+            # 重新计算执行流摘要（脚本内容或断言可能变化）
+            existing_script.flow_summary = self._build_script_flow_summary(script, interface, message)
+
             await existing_script.save(using_db=conn)
             logger.debug(f"脚本更新成功: {script.script_id}")
 
@@ -720,6 +838,9 @@ class ApiDataPersistenceAgent(BaseApiAutomationAgent):
 
                 # 状态管理
                 is_active=True,
+
+                # 执行流摘要：脚本对应 chain 或 endpoint 的 steps/asserts 完整结构
+                flow_summary=self._build_script_flow_summary(script, interface, message),
 
                 using_db=conn
             )

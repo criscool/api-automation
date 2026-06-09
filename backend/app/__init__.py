@@ -32,6 +32,15 @@ async def lifespan(app: FastAPI):
     from app.models.api_automation import _ensure_migration_scheduled_tasks
     await _ensure_migration_scheduled_tasks()
 
+    from app.models.api_automation import _ensure_migration_scenario_step
+    await _ensure_migration_scenario_step()
+
+    from app.models.api_automation import _ensure_migration_flow_summary
+    await _ensure_migration_flow_summary()
+
+    from app.models.api_automation import _ensure_migration_test_script_heal_fields
+    await _ensure_migration_test_script_heal_fields()
+
     # 初始化API自动化编排器
     try:
         from app.api.v1.endpoints.api_automation import initialize_orchestrator

@@ -179,6 +179,13 @@ export default {
   shareExecutionReport: (executionId) => request.post(`/execution-reports/${executionId}/share`),
   getSharedReport: (shareToken) => request.get(`/execution-reports/shared/${shareToken}`),
 
+  // AI 诊断与自愈（Phase 1：交互式诊断 / Phase 2：应用补丁 + 重跑验证）
+  healDiagnose: (data = {}) => request.post('/heal/diagnose', data),
+  healGetResult: (sessionId) => request.get(`/heal/sessions/${sessionId}/result`),
+  healStreamUrl: (sessionId) => `/api/v1/heal/sessions/${sessionId}/stream`,
+  healDownloadPatchUrl: (sessionId) => `/api/v1/heal/sessions/${sessionId}/patch`,
+  healApplyPatch: (sessionId, data = {}) => request.post(`/heal/sessions/${sessionId}/apply`, data, { timeout: 300000 }),
+
   // 平台文档管理（首页说明文档）
   getDocs: (params = {}) => request.get('/docs', { params }),
   getDocDetail: (filename) => request.get(`/docs/${filename}`),

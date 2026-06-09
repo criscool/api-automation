@@ -56,7 +56,7 @@
         :data="testScripts"
         :loading="loading"
         :row-key="(row) => row.test_id"
-        :scroll-x="1300"
+        :scroll-x="1460"
         :flex-height="true"
         @update:checked-row-keys="handleSelectionChange"
       />
@@ -351,17 +351,26 @@
         </n-tabs>
       </div>
     </n-modal>
+
+    <!-- AI 诊断抽屉 -->
+    <HealingDrawer
+      v-model:show="healingShow"
+      :script-id="healingScriptId"
+      :script-name="healingScriptName"
+      :test-case-id="healingTestCaseId"
+    />
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, h, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NTag, useMessage } from 'naive-ui'
+import { NButton, NTag, NPopover, useMessage } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import api from '@/api'
 import { formatTime } from '@/utils'
 import SimpleCodeEditor from '@/components/SimpleCodeEditor.vue'
+import HealingDrawer from './HealingDrawer.vue'
 
 // 动态导入Monaco Editor，如果失败则使用SimpleCodeEditor
 const codeEditorComponent = shallowRef(SimpleCodeEditor)
@@ -387,6 +396,23 @@ const loading = ref(false)
 const selectedScripts = ref([])
 const searchKeyword = ref('')
 const filterStatus = ref('')
+
+// AI 诊断抽屉
+const healingShow = ref(false)
+const healingScriptId = ref('')
+const healingScriptName = ref('')
+const healingTestCaseId = ref('')
+
+const openHealing = (row) => {
+  if (!row.script_id) {
+    message.error('该用例未关联有效脚本 ID，无法发起 AI 诊断')
+    return
+  }
+  healingScriptId.value = row.script_id
+  healingScriptName.value = row.script_file_name || row.name || ''
+  healingTestCaseId.value = row.test_id || ''
+  healingShow.value = true
+}
 
 // 模态框状态
 const showScriptModal = ref(false)
@@ -502,19 +528,222 @@ const scriptColumns = [
       : h('span', { style: 'color: #999;' }, '-')
   },
   {
-    title: '测试类型',
-    key: 'test_type',
-    width: 100,
+    title: '步骤',
+    key: 'flow_steps',
+    width: 130,
     render: (row) => {
-      const typeMap = {
-        positive: { type: 'success', text: '正向' },
-        negative: { type: 'warning', text: '异常' },
-        boundary: { type: 'info', text: '边界' },
-        security: { type: 'error', text: '安全' },
-        performance: { type: 'default', text: '性能' },
+      const fs = row.flow_summary || {}
+      const kind = fs.kind || ''
+
+      // cases 型：N 条独立用例
+      if (kind === 'cases') {
+        const cases = Array.isArray(fs.cases) ? fs.cases : []
+        const caseCount = Number(fs.case_count ?? cases.length) || 0
+        if (!caseCount) return h('span', { style: 'color: #999;' }, '-')
+
+        const trigger = h('div', { style: 'cursor: help; display: flex; align-items: center;' }, [
+          h(NTag, { type: 'warning', size: 'small' },
+            { default: () => `${caseCount} 用例` }),
+        ])
+
+        const caseRows = cases.map((c, idx) => {
+          const method = (c.method || '').toUpperCase()
+          const methodColor = {
+            GET: '#2080f0', POST: '#18a058', PUT: '#f0a020',
+            PATCH: '#d03050', DELETE: '#d03050',
+          }[method] || '#666'
+          return h('div', {
+            style: 'display: grid; grid-template-columns: 28px 56px 1fr; gap: 8px; align-items: start; padding: 6px 0; border-bottom: 1px solid #f0f0f0;'
+          }, [
+            h('div', { style: 'color: #999; font-size: 12px;' }, `${idx + 1}`),
+            h('div', {
+              style: `color: ${methodColor}; font-weight: 600; font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace;`
+            }, method || '-'),
+            h('div', { style: 'font-size: 12px; line-height: 1.5; word-break: break-all;' }, [
+              h('div', { style: 'font-family: ui-monospace, SFMono-Regular, monospace; color: #333;' }, c.path || ''),
+              c.purpose
+                ? h('div', { style: 'color: #666; margin-top: 2px;' }, c.purpose)
+                : null,
+            ]),
+          ])
+        })
+
+        const tipContent = h('div', { style: 'width: 520px; font-size: 12px;' }, [
+          h('div', {
+            style: 'font-weight: 600; padding-bottom: 6px; border-bottom: 1px solid #e5e5e5; margin-bottom: 4px;'
+          }, `${fs.chain_name || '独立用例集'}（共 ${caseCount} 条独立用例）`),
+          h('div', { style: 'max-height: 360px; overflow-y: auto; padding-right: 4px;' }, caseRows),
+        ])
+
+        return h(NPopover, {
+          trigger: 'hover',
+          placement: 'top',
+          raw: false,
+          style: { maxWidth: '560px', padding: '12px' },
+        }, {
+          trigger: () => trigger,
+          default: () => tipContent,
+        })
       }
-      const t = typeMap[row.test_type] || { type: 'default', text: row.test_type || '-' }
-      return h(NTag, { type: t.type, size: 'small' }, { default: () => t.text })
+
+      // scenario / 其他：合并步骤展示
+      const steps = Array.isArray(fs.steps) ? fs.steps : []
+      const stepCount = Number(fs.step_count ?? steps.length) || 0
+      if (!stepCount) return h('span', { style: 'color: #999;' }, '-')
+
+      const isScenario = kind === 'scenario'
+      const trigger = h('div', { style: 'cursor: help; display: flex; align-items: center;' }, [
+        h(NTag, { type: isScenario ? 'info' : 'default', size: 'small' },
+          { default: () => `${stepCount} 步` }),
+      ])
+
+      const stepRows = steps.map((s) => {
+        const method = (s.method || '').toUpperCase()
+        const methodColor = {
+          GET: '#2080f0', POST: '#18a058', PUT: '#f0a020',
+          PATCH: '#d03050', DELETE: '#d03050',
+        }[method] || '#666'
+        return h('div', {
+          style: 'display: grid; grid-template-columns: 28px 56px 1fr; gap: 8px; align-items: start; padding: 6px 0; border-bottom: 1px solid #f0f0f0;'
+        }, [
+          h('div', { style: 'color: #999; font-size: 12px;' }, `${s.no}`),
+          h('div', {
+            style: `color: ${methodColor}; font-weight: 600; font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace;`
+          }, method || '-'),
+          h('div', { style: 'font-size: 12px; line-height: 1.5; word-break: break-all;' }, [
+            h('div', { style: 'font-family: ui-monospace, SFMono-Regular, monospace; color: #333;' }, s.path || ''),
+            s.purpose
+              ? h('div', { style: 'color: #666; margin-top: 2px;' }, s.purpose)
+              : null,
+          ]),
+        ])
+      })
+
+      const tipContent = h('div', { style: 'width: 520px; font-size: 12px;' }, [
+        h('div', {
+          style: 'font-weight: 600; padding-bottom: 6px; border-bottom: 1px solid #e5e5e5; margin-bottom: 4px;'
+        }, isScenario ? `Scenario：${fs.chain_name || ''}（共 ${stepCount} 步）` : `执行流（共 ${stepCount} 步）`),
+        h('div', { style: 'max-height: 360px; overflow-y: auto; padding-right: 4px;' }, stepRows),
+      ])
+
+      return h(NPopover, {
+        trigger: 'hover',
+        placement: 'top',
+        raw: false,
+        style: { maxWidth: '560px', padding: '12px' },
+      }, {
+        trigger: () => trigger,
+        default: () => tipContent,
+      })
+    }
+  },
+  {
+    title: '断言',
+    key: 'flow_asserts',
+    width: 130,
+    render: (row) => {
+      const fs = row.flow_summary || {}
+      const kind = fs.kind || ''
+
+      // cases 型：聚合每条用例的断言数
+      if (kind === 'cases') {
+        const cases = Array.isArray(fs.cases) ? fs.cases : []
+        const total = cases.reduce((sum, c) => sum + (Number(c.assertion_count) || 0), 0)
+        if (!total) return h('span', { style: 'color: #999;' }, '-')
+
+        const trigger = h('div', { style: 'cursor: help; display: flex; align-items: center;' }, [
+          h(NTag, { type: 'success', size: 'small' },
+            { default: () => `Σ${total} 断言` }),
+        ])
+
+        const caseRows = cases.map((c, idx) => h('div', {
+          style: 'display: grid; grid-template-columns: 64px 1fr 56px; gap: 8px; align-items: start; padding: 6px 0; border-bottom: 1px solid #f0f0f0;'
+        }, [
+          h('div', { style: 'color: #999; font-size: 12px;' }, `用例 ${idx + 1}`),
+          h('div', { style: 'font-size: 12px; line-height: 1.5; word-break: break-all;' }, [
+            h('div', {
+              style: 'font-family: ui-monospace, SFMono-Regular, monospace; color: #333;'
+            }, `${(c.method || '').toUpperCase()} ${c.path || ''}`),
+            c.purpose
+              ? h('div', { style: 'color: #666; margin-top: 2px;' }, c.purpose)
+              : null,
+          ]),
+          h('div', {
+            style: 'text-align: right; color: #18a058; font-weight: 600; font-size: 12px;'
+          }, `${c.assertion_count || 0} 断言`),
+        ]))
+
+        const tipContent = h('div', { style: 'width: 520px; font-size: 12px;' }, [
+          h('div', {
+            style: 'font-weight: 600; padding-bottom: 6px; border-bottom: 1px solid #e5e5e5; margin-bottom: 4px;'
+          }, `各用例断言数（共 ${total} 条，跨 ${cases.length} 用例）`),
+          h('div', { style: 'max-height: 360px; overflow-y: auto; padding-right: 4px;' }, caseRows),
+        ])
+
+        return h(NPopover, {
+          trigger: 'hover',
+          placement: 'top',
+          raw: false,
+          style: { maxWidth: '560px', padding: '12px' },
+        }, {
+          trigger: () => trigger,
+          default: () => tipContent,
+        })
+      }
+
+      // scenario / 其他：合并断言列表
+      const asserts = Array.isArray(fs.assertions) ? fs.assertions : []
+      const assertCount = Number(fs.assertion_count ?? asserts.length) || 0
+      if (!assertCount) return h('span', { style: 'color: #999;' }, '-')
+
+      const trigger = h('div', { style: 'cursor: help; display: flex; align-items: center;' }, [
+        h(NTag, { type: 'success', size: 'small' },
+          { default: () => `${assertCount} 断言` }),
+      ])
+
+      const assertRows = asserts.map((a) => {
+        const stepTag = a.step_no ? `step ${a.step_no}` : '-'
+        const kind = a.kind || 'equals'
+        const inPath = a.in || ''
+        const hasExpected = a.expected && 'value' in a.expected
+        const expectedStr = hasExpected ? JSON.stringify(a.expected.value) : ''
+        return h('div', {
+          style: 'display: grid; grid-template-columns: 64px 1fr; gap: 8px; align-items: start; padding: 6px 0; border-bottom: 1px solid #f0f0f0;'
+        }, [
+          h('div', { style: 'color: #999; font-size: 12px;' }, stepTag),
+          h('div', { style: 'font-size: 12px; line-height: 1.5; word-break: break-all;' }, [
+            h('div', {
+              style: 'font-family: ui-monospace, SFMono-Regular, monospace; color: #333;'
+            }, [
+              h('span', { style: 'color: #d03050; font-weight: 600;' }, kind),
+              inPath ? h('span', { style: 'color: #666;' }, ` ${inPath}`) : null,
+              hasExpected
+                ? h('span', { style: 'color: #18a058;' }, ` → ${expectedStr}`)
+                : null,
+            ]),
+            a.desc
+              ? h('div', { style: 'color: #666; margin-top: 2px;' }, a.desc)
+              : null,
+          ]),
+        ])
+      })
+
+      const tipContent = h('div', { style: 'width: 520px; font-size: 12px;' }, [
+        h('div', {
+          style: 'font-weight: 600; padding-bottom: 6px; border-bottom: 1px solid #e5e5e5; margin-bottom: 4px;'
+        }, `断言（共 ${assertCount} 条）`),
+        h('div', { style: 'max-height: 360px; overflow-y: auto; padding-right: 4px;' }, assertRows),
+      ])
+
+      return h(NPopover, {
+        trigger: 'hover',
+        placement: 'top',
+        raw: false,
+        style: { maxWidth: '560px', padding: '12px' },
+      }, {
+        trigger: () => trigger,
+        default: () => tipContent,
+      })
     }
   },
   {
@@ -539,28 +768,45 @@ const scriptColumns = [
   {
     title: '操作',
     key: 'actions',
-    width: 200,
+    width: 280,
     fixed: 'right',
-    render: (row) => [
-      h(NButton,
-        {
-          size: 'small',
-          type: 'primary',
-          onClick: () => editScript(row)
-        },
-        { default: () => '详情' }
-      ),
-      h(NButton,
-        {
-          size: 'small',
-          type: 'info',
-          style: 'margin-left: 8px',
-          loading: executing.value && executingId.value === row.test_id,
-          onClick: () => executeScript(row)
-        },
-        { default: () => '执行' }
-      ),
-      h(NButton,
+    render: (row) => {
+      const buttons = [
+        h(NButton,
+          {
+            size: 'small',
+            type: 'primary',
+            onClick: () => editScript(row)
+          },
+          { default: () => '详情' }
+        ),
+        h(NButton,
+          {
+            size: 'small',
+            type: 'info',
+            style: 'margin-left: 8px',
+            loading: executing.value && executingId.value === row.test_id,
+            onClick: () => executeScript(row)
+          },
+          { default: () => '执行' }
+        ),
+      ]
+
+      // 最近执行失败时才显示【AI 诊断】按钮
+      const failedStatus = ['FAILED', 'ERROR']
+      if (failedStatus.includes(row.last_execution_status)) {
+        buttons.push(h(NButton,
+          {
+            size: 'small',
+            type: 'warning',
+            style: 'margin-left: 8px',
+            onClick: () => openHealing(row)
+          },
+          { default: () => 'AI 诊断' }
+        ))
+      }
+
+      buttons.push(h(NButton,
         {
           size: 'small',
           type: 'error',
@@ -568,8 +814,10 @@ const scriptColumns = [
           onClick: () => deleteScript(row)
         },
         { default: () => '删除' }
-      )
-    ]
+      ))
+
+      return buttons
+    }
   }
 ]
 

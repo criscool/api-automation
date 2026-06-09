@@ -77,8 +77,57 @@ async def _ensure_script_file_on_disk(script_file_path: str, generated_tests_dir
     return target
 
 
-def _serialize_case_for_list(tc: TestCase, cat_map: dict = None) -> Dict[str, Any]:
-    """列表行序列化：刚好够前端"脚本管理"页用的字段"""
+def _build_case_level_flow_summary(tc: TestCase, script_fs: Dict[str, Any] = None) -> Dict[str, Any]:
+    """从单条 TestCase 派生用例级 flow_summary。
+
+    - scenario 型脚本下的用例（1 用例 = 整条链路）→ 直接复用脚本 flow_summary
+    - cases 型 / 未分类 → 用例自身派生（1 步骤 + 自身断言）
+    """
+    # scenario 型：用例代表整条 chain，直接用脚本级 flow_summary
+    if script_fs and script_fs.get("kind") == "scenario":
+        return script_fs
+
+    # cases / 未知：用例自己 = 1 步骤 + 自身断言
+    ep = tc.endpoint
+    if ep is None:
+        return {}
+    method = ep.method.value if hasattr(ep.method, "value") else str(ep.method)
+    purpose = (tc.description or "").strip()
+    if not purpose:
+        name = tc.name or ""
+        purpose = name.split(" - ", 1)[1] if " - " in name else name
+    step = {
+        "no": 1,
+        "method": method.upper(),
+        "path": ep.path or "",
+        "purpose": purpose,
+    }
+    asserts: List[Dict[str, Any]] = []
+    for a in (tc.assertions or []):
+        if isinstance(a, dict):
+            asserts.append({
+                "kind": str(a.get("comparison_operator") or "equals"),
+                "in": str(a.get("assertion_type") or ""),
+                "expected": {"value": a.get("expected_value")},
+                "desc": str(a.get("description") or ""),
+                "step_no": 1,
+            })
+    return {
+        "kind": "case",
+        "step_count": 1,
+        "assertion_count": len(asserts),
+        "primary_action": f"[1] {step['method']} {step['path']}",
+        "steps": [step],
+        "assertions": asserts,
+    }
+
+
+def _serialize_case_for_list(tc: TestCase, cat_map: dict = None, script_lookup: dict = None) -> Dict[str, Any]:
+    """列表行序列化：刚好够前端"用例管理"页用的字段
+
+    script_lookup: {script_file_path / script_file_name: {"flow_summary": dict, "script_id": str}}
+        用于 scenario 型用例复用脚本级 flow_summary，以及 AI 诊断按钮使用 script_id
+    """
     endpoint = tc.endpoint  # 已 prefetch
     interface_info: Dict[str, Any] = {}
     if endpoint:
@@ -102,6 +151,15 @@ def _serialize_case_for_list(tc: TestCase, cat_map: dict = None) -> Dict[str, An
                 "name": cat.name,
             }
 
+    # 取该用例所属脚本的 flow_summary + script_id
+    script_entry = {}
+    if script_lookup and tc.script_file_path:
+        script_entry = script_lookup.get(tc.script_file_path) or script_lookup.get(script_file_name) or {}
+    script_fs = script_entry.get("flow_summary") or {}
+    script_id = script_entry.get("script_id") or ""
+
+    flow_summary = _build_case_level_flow_summary(tc, script_fs)
+
     return {
         "test_id": tc.test_id,
         "name": tc.name,
@@ -112,6 +170,7 @@ def _serialize_case_for_list(tc: TestCase, cat_map: dict = None) -> Dict[str, An
         "tags": tc.tags or [],
         "interface_info": interface_info,
         "category_info": category_info,
+        "script_id": script_id,
         "script_file_name": script_file_name,
         "script_file_path": tc.script_file_path or "",
         "class_name": tc.class_name or "",
@@ -119,14 +178,15 @@ def _serialize_case_for_list(tc: TestCase, cat_map: dict = None) -> Dict[str, An
         "generated_by": tc.generated_by,
         "last_execution_status": tc.last_execution_status,
         "last_execution_time": tc.last_execution_time.isoformat() if tc.last_execution_time else None,
+        "flow_summary": flow_summary,
         "created_at": tc.created_at.isoformat() if tc.created_at else None,
         "updated_at": tc.updated_at.isoformat() if tc.updated_at else None,
     }
 
 
-def _serialize_case_for_detail(tc: TestCase, cat_map: dict = None) -> Dict[str, Any]:
+def _serialize_case_for_detail(tc: TestCase, cat_map: dict = None, script_lookup: dict = None) -> Dict[str, Any]:
     """详情序列化：列表字段 + test_data/assertions/setup/teardown"""
-    data = _serialize_case_for_list(tc, cat_map)
+    data = _serialize_case_for_list(tc, cat_map, script_lookup)
     data.update({
         "test_data": tc.test_data or [],
         "assertions": tc.assertions or [],
@@ -186,7 +246,27 @@ async def get_all_test_cases(
             cats = await TestCaseCategory.filter(id__in=list(cat_ids_in_result)).all()
             cat_map = {c.id: c for c in cats}
 
-        items = [_serialize_case_for_list(tc, cat_map) for tc in rows]
+        # 构建脚本 lookup —— 用于 scenario 型用例复用脚本级链路展示 + AI 诊断按钮取 script_id
+        # 同一 file_path 可能有多条 TestScript（历史重复导入），优先取 flow_summary 非空 + 最近更新
+        script_paths = {tc.script_file_path for tc in rows if tc.script_file_path}
+        script_lookup: Dict[str, Any] = {}
+        if script_paths:
+            scripts = await TestScript.filter(
+                file_path__in=list(script_paths), is_active=True
+            ).only("script_id", "file_path", "file_name", "flow_summary").order_by("-updated_at")
+            for s in scripts:
+                fs = s.flow_summary or {}
+                entry = {"flow_summary": fs, "script_id": s.script_id or ""}
+                if s.file_path:
+                    existing = script_lookup.get(s.file_path)
+                    if not existing or not existing.get("flow_summary"):
+                        script_lookup[s.file_path] = entry
+                if s.file_name:
+                    existing = script_lookup.get(s.file_name)
+                    if not existing or not existing.get("flow_summary"):
+                        script_lookup[s.file_name] = entry
+
+        items = [_serialize_case_for_list(tc, cat_map, script_lookup) for tc in rows]
 
         return {
             "code": 200,
@@ -220,10 +300,23 @@ async def get_test_case_detail(test_id: str):
             if cat:
                 cat_map = {cat.id: cat}
 
+        # 反查该用例所属脚本（scenario 型用例需要完整链路 + AI 诊断需 script_id）
+        script_lookup: Dict[str, Any] = {}
+        if tc.script_file_path:
+            s = await TestScript.filter(
+                file_path=tc.script_file_path, is_active=True
+            ).only("script_id", "file_path", "file_name", "flow_summary").order_by("-updated_at").first()
+            if s:
+                entry = {"flow_summary": s.flow_summary or {}, "script_id": s.script_id or ""}
+                if s.file_path:
+                    script_lookup[s.file_path] = entry
+                if s.file_name:
+                    script_lookup[s.file_name] = entry
+
         return {
             "code": 200,
             "msg": "OK",
-            "data": _serialize_case_for_detail(tc, cat_map),
+            "data": _serialize_case_for_detail(tc, cat_map, script_lookup),
             "success": True,
         }
     except HTTPException:

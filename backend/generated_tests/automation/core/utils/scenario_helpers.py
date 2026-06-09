@@ -29,13 +29,28 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _STEP_REF_RE = re.compile(r"^step:(\d+)\.dataOut\.(.+)$")
 _RESPONSE_PREFIX_RE = re.compile(r"^response\.?")
-# 路径 token：字段名 / [] / [N] / [key=value]
+# 路径 token：字段名 / [] / [*] / [N] / [key=value] / [?(@.field op value)]
+# [*] 是 [] 的 JSONPath 别名；[?(@.field=='v')] 支持 == / != 字面值过滤
 _PATH_TOKEN_RE = re.compile(
     r"[a-zA-Z_][a-zA-Z0-9_]*"
+    r"|\[\*\]"
     r"|\[\]"
     r"|\[\d+\]"
     r"|\[[a-zA-Z_][a-zA-Z0-9_]*=[^\]]+\]"
+    r"|\[\?\(@\.[^)]+\)\]"
 )
+_JSONPATH_FILTER_RE = re.compile(
+    r"^\[\?\(@\.([a-zA-Z_][a-zA-Z0-9_]*)\s*(==|!=)\s*('([^']*)'|\"([^\"]*)\"|([^)]+?))\)\]$"
+)
+
+# 断言 spec 内 target 取值的 key 优先级：先 ref（动态引用），后 value（字面值）
+# xxxRef 取前序 step.dataOut 的值；xxxValue 是字面期望值；
+# 末尾 "equals"/"value" 保留对早期格式的兼容（asset-management 风格）
+_REF_KEYS = ("equalsRef", "findRef", "notFindRef", "everyRef", "neqRef",
+             "gteRef", "lteRef", "gtRef", "ltRef")
+_VALUE_KEYS = ("equalsValue", "findValue", "notFindValue", "everyValue",
+               "gteValue", "lteValue", "gtValue", "ltValue", "neqValue",
+               "equals", "value")
 
 
 def resolve_step_ref(ref: Any, ctx: Dict[int, Dict[str, Any]]) -> Any:
@@ -67,10 +82,27 @@ def _walk(obj: Any, tokens: List[str]) -> Any:
     if obj is None or not tokens:
         return obj
     tok, rest = tokens[0], tokens[1:]
-    if tok == "[]":
+    if tok == "[]" or tok == "[*]":
         if not isinstance(obj, list):
             return None
         return [_walk(item, rest) for item in obj]
+    if tok.startswith("[?(") and tok.endswith(")]"):
+        # JSONPath filter: [?(@.field == 'value')] / [?(@.field != 1)]
+        m = _JSONPATH_FILTER_RE.match(tok)
+        if not m or not isinstance(obj, list):
+            return None
+        field, op = m.group(1), m.group(2)
+        # group 4 单引号串 / group 5 双引号串 / group 6 裸字面值（数字/布尔）
+        raw_value = m.group(4) if m.group(4) is not None else (
+            m.group(5) if m.group(5) is not None else (m.group(6) or "").strip()
+        )
+        for item in obj:
+            if not isinstance(item, dict):
+                continue
+            field_val = item.get(field)
+            if _filter_match(field_val, op, raw_value):
+                return _walk(item, rest)
+        return None
     if tok.startswith("[") and tok.endswith("]"):
         inner = tok[1:-1]
         if "=" in inner:
@@ -92,6 +124,24 @@ def _walk(obj: Any, tokens: List[str]) -> Any:
     if not isinstance(obj, dict):
         return None
     return _walk(obj.get(tok), rest)
+
+
+def _filter_match(field_val: Any, op: str, raw_value: str) -> bool:
+    """JSONPath filter 字面值比较。支持 == / !=；字符串与字段原值容差比较。"""
+    # 先按原始字符串比较；再尝试数值；再 bool
+    candidates: List[Any] = [raw_value]
+    try:
+        candidates.append(int(raw_value))
+    except (ValueError, TypeError):
+        pass
+    try:
+        candidates.append(float(raw_value))
+    except (ValueError, TypeError):
+        pass
+    if raw_value in ("true", "false"):
+        candidates.append(raw_value == "true")
+    matched = any(field_val == c for c in candidates) or str(field_val) == raw_value
+    return matched if op == "==" else not matched
 
 
 def _pick_first(value: Any) -> Any:
@@ -235,15 +285,21 @@ def run_assert(
         elif kind == "every":
             _assert_every(response_json, spec, ctx, step_no=step_no)
         elif kind == "equals":
-            _assert_equals(response_json, spec, ctx, step_no=step_no)
+            _assert_equals(response_json, spec, ctx, step_no=step_no, expect_equal=True)
+        elif kind in ("neq", "notEquals"):
+            _assert_equals(response_json, spec, ctx, step_no=step_no, expect_equal=False)
+        elif kind in ("gte", "lte", "gt", "lt"):
+            _assert_compare(response_json, spec, ctx, op=kind, step_no=step_no)
 
 
 def _resolve_target(spec: Dict[str, Any], ctx: Dict[int, Dict[str, Any]]) -> Any:
-    if "equalsRef" in spec:
-        return resolve_step_ref(spec["equalsRef"], ctx)
-    if "equals" in spec:
-        return spec["equals"]
-    return spec.get("value")
+    for k in _REF_KEYS:
+        if k in spec:
+            return resolve_step_ref(spec[k], ctx)
+    for k in _VALUE_KEYS:
+        if k in spec:
+            return spec[k]
+    return None
 
 
 def _flatten(value: Any) -> List[Any]:
@@ -293,10 +349,66 @@ def _assert_every(resp, spec, ctx, *, step_no):
         )
 
 
-def _assert_equals(resp, spec, ctx, *, step_no):
+def _assert_equals(resp, spec, ctx, *, step_no, expect_equal: bool = True):
     in_path = spec.get("in", spec.get("path", ""))
     target = _resolve_target(spec, ctx)
     actual = resolve_path(resp, in_path)
-    assert actual == target, (
-        f"step {step_no}: {in_path} 期望 {target!r}，实际 {actual!r}"
+    equal = _values_equal(actual, target)
+    if expect_equal:
+        assert equal, (
+            f"step {step_no}: {in_path} 期望 {target!r}，实际 {actual!r}"
+        )
+    else:
+        assert not equal, (
+            f"step {step_no}: {in_path} 期望不等于 {target!r}，实际相等"
+        )
+
+
+def _assert_compare(resp, spec, ctx, *, op, step_no):
+    in_path = spec.get("in", spec.get("path", ""))
+    target = _resolve_target(spec, ctx)
+    actual = resolve_path(resp, in_path)
+    a_num = _coerce_number(actual)
+    t_num = _coerce_number(target)
+    if a_num is None or t_num is None:
+        raise AssertionError(
+            f"step {step_no}: {op} {in_path} 无法转为数值（actual={actual!r}, target={target!r}）"
+        )
+    if op == "gte":
+        ok = a_num >= t_num
+    elif op == "lte":
+        ok = a_num <= t_num
+    elif op == "gt":
+        ok = a_num > t_num
+    elif op == "lt":
+        ok = a_num < t_num
+    else:
+        raise AssertionError(f"step {step_no}: 未知比较运算符 {op!r}")
+    assert ok, (
+        f"step {step_no}: {in_path} 期望 {op} {target!r}，实际 {actual!r}"
     )
+
+
+def _coerce_number(value: Any) -> Optional[float]:
+    """把 int / float / 数字字符串统一成 float；其它返回 None。bool 不算数字。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _values_equal(actual: Any, target: Any) -> bool:
+    """equals 比较：原值相等优先；两边都能 coerce 成数字且数值相等也算等（容忍 '0' == 0）。"""
+    if actual == target:
+        return True
+    a_num = _coerce_number(actual)
+    t_num = _coerce_number(target)
+    if a_num is not None and t_num is not None and a_num == t_num:
+        return True
+    return False

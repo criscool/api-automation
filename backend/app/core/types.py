@@ -17,6 +17,9 @@ class AgentTypes(Enum):
     TEST_EXECUTOR = "test_executor"
     LOG_RECORDER = "log_recorder"
     CATEGORY_RULE_RECOMMENDER = "category_rule_recommender"
+    # AI 诊断与自愈
+    TEST_ANALYSIS = "test_analysis"
+    TEST_HEALER = "test_healer"
 
 
 class AgentPlatform(Enum):
@@ -103,6 +106,8 @@ AGENT_NAMES: Dict[str, str] = {
     AgentTypes.TEST_EXECUTOR.value: "测试执行智能体",
     AgentTypes.LOG_RECORDER.value: "日志记录智能体",
     AgentTypes.CATEGORY_RULE_RECOMMENDER.value: "分类规则推荐智能体",
+    AgentTypes.TEST_ANALYSIS.value: "测试失败分析智能体",
+    AgentTypes.TEST_HEALER.value: "测试脚本修复智能体",
 }
 
 

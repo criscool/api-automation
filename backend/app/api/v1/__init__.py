@@ -18,6 +18,7 @@ from .endpoints.execution_reports import router as execution_reports_router
 
 from .endpoints.docs import router as docs_router
 from .endpoints.scheduled_tasks import router as scheduled_tasks_router
+from .endpoints.healer import router as healer_router
 
 
 v1_router = APIRouter()
@@ -37,3 +38,4 @@ v1_router.include_router(testcase_category_router, prefix="/testcase-categories"
 v1_router.include_router(execution_reports_router, prefix="/execution-reports", tags=["执行报告"])
 v1_router.include_router(docs_router, prefix="/docs", tags=["文档管理"])
 v1_router.include_router(scheduled_tasks_router, prefix="/api-automation", tags=["定时任务"])
+v1_router.include_router(healer_router, prefix="/heal", tags=["AI 诊断"])

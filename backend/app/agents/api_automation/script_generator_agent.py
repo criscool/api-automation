@@ -1206,6 +1206,7 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
                 scripts=persisted_scripts,
                 test_cases=message.test_cases,
                 endpoints=message.endpoints,
+                scenarios=list(getattr(message, "scenarios", None) or []),
                 config_files=output.config_files,
                 requirements_txt=output.requirements_txt,
                 readme_content=output.readme_content,
@@ -1258,6 +1259,12 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
 
         if not all_methods:
             return {}
+
+        # scenario 链路脚本：单个 test_chain 方法覆盖 N 个 step，所有 case 共享同一方法
+        if "pytest.mark.scenario" in script_content and len(all_methods) == 1:
+            cls, mth, _ = all_methods[0]
+            logger.info(f"scenario 模式：{len(test_cases)} 个 case 全部映射到 {cls}.{mth}")
+            return {tc.test_case_id: {"class_name": cls, "method_name": mth} for tc in test_cases}
 
         # AST 工具：从方法体提取所有 api_client.xxx(URL, ...) 调用的 URL 字面量
         # 处理三种情况：直接字符串字面量、本地变量回溯（var = "URL"）、f-string 取字面部分

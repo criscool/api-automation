@@ -105,15 +105,15 @@ class DependencyDocConverter:
         return list(self._endpoint_cache.values())
 
     def to_test_cases(self) -> List[GeneratedTestCase]:
-        """每个 chain step → 一个 GeneratedTestCase。
+        """每个 chain → 一个 GeneratedTestCase（整条链折叠成 1 条用例）。
 
-        目的：让 ApiDataPersistenceAgent 的 _store_test_cases 正常入库，
-        前端"用例管理"页能看到每一步。case 的 tags 含 `scenario:<chain.name>`
-        便于前端按 chain 聚合。
+        关联到 chain 的 primary_endpoint，tags 含 `scenario:<chain.name>`。
+        前端"用例管理"页一个 chain 显示为一条用例；脚本管理的
+        steps/asserts 摘要由 TestScript.flow_summary 承载（持久化时写入）。
 
         结果被缓存：GeneratedTestCase.test_case_id 用 uuid4 默认值，
         多次调用必须返回同一批对象，否则 ScenarioStepSpec.related_test_case_id
-        会引用到一个不存在的 UUID。
+        会引用到不存在的 UUID。
         """
         if self._test_cases_cache is not None:
             return self._test_cases_cache
@@ -121,24 +121,39 @@ class DependencyDocConverter:
         cases: List[GeneratedTestCase] = []
         for chain in self.doc.get("chains", []) or []:
             chain_name = str(chain.get("name") or "")
-            for step in chain.get("steps", []) or []:
-                ep = self._endpoint_for_step(step)
+            chain_desc = str(chain.get("description") or "")
+            steps = chain.get("steps", []) or []
+
+            # 主端点：取 chain 内第一个写操作；都没有就退化为第一 step 的端点
+            primary_ep_id: Optional[str] = None
+            first_ep_id: Optional[str] = None
+            for raw_step in steps:
+                ep = self._endpoint_for_step(raw_step)
                 if ep is None:
                     continue
-                purpose = str(step.get("purpose") or "")
-                test_name = f"test_{self._slugify(chain_name)}_step{step.get('step', 0)}"
-                cases.append(
-                    GeneratedTestCase(
-                        test_name=test_name,
-                        endpoint_id=ep.endpoint_id,
-                        test_type=TestCaseType.POSITIVE,
-                        description=purpose or test_name,
-                        test_data=[],
-                        assertions=[],
-                        priority=int(step.get("step") or 1),
-                        tags=[f"scenario:{chain_name}"] if chain_name else [],
-                    )
+                if first_ep_id is None:
+                    first_ep_id = ep.endpoint_id
+                method = str((raw_step.get("endpoint") or {}).get("method", "GET")).upper()
+                if primary_ep_id is None and method in ("POST", "PUT", "PATCH", "DELETE"):
+                    primary_ep_id = ep.endpoint_id
+            primary_ep_id = primary_ep_id or first_ep_id
+            if primary_ep_id is None:
+                continue  # chain 里一个有效端点都没有，跳过
+
+            test_name = f"test_scenario_{self._slugify(chain_name)}"
+            description = chain_desc or chain_name or test_name
+            cases.append(
+                GeneratedTestCase(
+                    test_name=test_name,
+                    endpoint_id=primary_ep_id,
+                    test_type=TestCaseType.POSITIVE,
+                    description=description,
+                    test_data=[],
+                    assertions=[],
+                    priority=1,
+                    tags=[f"scenario:{chain_name}", "scenario"] if chain_name else ["scenario"],
                 )
+            )
         self._test_cases_cache = cases
         return cases
 
@@ -213,13 +228,13 @@ class DependencyDocConverter:
         """
         if self._scenarios_cache is not None:
             return self._scenarios_cache
-        # test_case_id 索引：(chain_name, step_no) → test_case_id
-        case_index: Dict[Tuple[str, int], str] = {}
+        # chain_name → 该 chain 对应的（唯一）test_case_id
+        # 1 chain = 1 GeneratedTestCase 后所有 step 共享同一个 case_id
+        case_index: Dict[str, str] = {}
         for tc in self.to_test_cases():
-            # 用 tags + priority 反推 (chain_name, step_no)
             for tag in tc.tags:
                 if tag.startswith("scenario:"):
-                    case_index[(tag[len("scenario:") :], int(tc.priority))] = tc.test_case_id
+                    case_index[tag[len("scenario:") :]] = tc.test_case_id
                     break
 
         scenarios: List[ScenarioTestCase] = []
@@ -253,7 +268,7 @@ class DependencyDocConverter:
                     assert_spec=raw_step.get("assert"),
                     depends_on=[int(x) for x in (raw_step.get("dependsOn") or [])],
                     related_endpoint_id=ep.endpoint_id,
-                    related_test_case_id=case_index.get((chain_name, step_no)),
+                    related_test_case_id=case_index.get(chain_name),
                 )
                 steps.append(step_spec)
 

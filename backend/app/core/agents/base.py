@@ -58,6 +58,13 @@ class BaseAgent(RoutedAgent, ABC):
             region: 消息区域
         """
         try:
+            # 未在 AutoGen Runtime 中注册时（如 healer 直接实例化调用），
+            # self.id 取不到——直接静默返回，避免噪音日志
+            try:
+                source_key = self.id.key
+            except (AttributeError, AssertionError):
+                return
+
             stream_message = StreamMessage(
                 content=content,
                 message_type=message_type,
@@ -71,7 +78,7 @@ class BaseAgent(RoutedAgent, ABC):
             # 发布到流式响应主题
             await self.publish_message(
                 stream_message,
-                topic_id=TopicId(type="stream_response", source=self.id.key)
+                topic_id=TopicId(type="stream_response", source=source_key)
             )
 
             self.message_count += 1
