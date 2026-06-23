@@ -89,6 +89,10 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
         start_time = datetime.now()
         self.generation_metrics["total_generations"] += 1
 
+        # 隔离模式：每次上传生成唯一后缀，避免覆盖已存在的同名脚本
+        isolated = (message.generation_options or {}).get("isolated_mode", False)
+        self._run_suffix = uuid.uuid4().hex[:8] if isolated else ""
+
         try:
             logger.info(
                 f"开始生成测试脚本: document_id={message.document_id}, "
@@ -328,7 +332,7 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
         import pprint
 
         slug = self._sanitize_name(sc.name)
-        script_name = f"test_scenario_{slug}.py"
+        script_name = self._suffix_name(f"test_scenario_{slug}.py")
         class_name = "TestScenario" + "".join(w.capitalize() for w in slug.split("_") if w)
         if not class_name or class_name == "TestScenario":
             class_name = "TestScenarioChain"
@@ -1150,14 +1154,21 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
                     continue
 
                 if script_path.exists():
-                    try:
-                        existing_source = script_path.read_text(encoding='utf-8')
-                        merged = merge_pytest_scripts(existing_source, script.script_content)
-                        script_path.write_text(merged, encoding='utf-8')
-                        logger.info(f"已合并测试脚本到现有文件: {script_path}")
-                    except Exception as merge_err:
-                        logger.warning(f"AST 合并失败，覆盖写入 {script_path}: {merge_err}")
+                    is_conftest = file_name == "conftest.py"
+                    if is_conftest or not self._run_suffix:
+                        # conftest.py 始终合并；非隔离模式也合并
+                        try:
+                            existing_source = script_path.read_text(encoding='utf-8')
+                            merged = merge_pytest_scripts(existing_source, script.script_content)
+                            script_path.write_text(merged, encoding='utf-8')
+                            logger.info(f"已合并到现有文件: {script_path}")
+                        except Exception as merge_err:
+                            logger.warning(f"AST 合并失败，覆盖写入 {script_path}: {merge_err}")
+                            script_path.write_text(script.script_content, encoding='utf-8')
+                    else:
+                        # 隔离模式 + 非 conftest → 覆盖写入新文件（已有后缀保证不冲突）
                         script_path.write_text(script.script_content, encoding='utf-8')
+                        logger.info(f"隔离模式覆盖写入: {script_path}")
                 else:
                     script_path.write_text(script.script_content, encoding='utf-8')
                     logger.info(f"已保存测试脚本: {script_path}")
@@ -1487,23 +1498,30 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
         return name
 
     def _derive_script_name(self, endpoints: List[ParsedEndpoint]) -> str:
-        """从端点推导脚本文件名"""
+        """从端点推导脚本文件名（隔离模式加后缀避免覆盖旧文件）"""
         if not endpoints:
-            return "test_api_automation.py"
+            return self._suffix_name("test_api_automation.py")
 
         tags = []
         for ep in endpoints:
             tags.extend(ep.tags)
         if tags:
             name = self._sanitize_name(tags[0])
-            return f"test_{name}.py"
+            return self._suffix_name(f"test_{name}.py")
 
         path_parts = endpoints[0].path.strip("/").split("/")
         if len(path_parts) >= 2:
             name = self._sanitize_name(path_parts[-1])
-            return f"test_{name}.py"
+            return self._suffix_name(f"test_{name}.py")
 
-        return "test_api_automation.py"
+        return self._suffix_name("test_api_automation.py")
+
+    def _suffix_name(self, base: str) -> str:
+        """隔离模式下给文件名加后缀，如 test_strategy.py → test_strategy_a1b2c3d4.py"""
+        if not self._run_suffix:
+            return base
+        stem, ext = base.rsplit(".", 1)
+        return f"{stem}_{self._run_suffix}.{ext}"
 
     def _derive_class_name(self, endpoints: List[ParsedEndpoint]) -> str:
         """从端点推导测试类名"""

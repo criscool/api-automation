@@ -100,6 +100,7 @@ export default {
   getTestCaseDetail: (testId) => request.get(`/testcases/${testId}`),
   deleteTestCase: (testId) => request.delete(`/testcases/${testId}`),
   runTestCase: (testId, data = {}) => request.post(`/testcases/${testId}/run`, data),
+  updateTestCase: (testId, data) => request.put(`/testcases/${testId}`, data),
   executeTestCases: (data) => request.post('/testcases/execute', data),
   moveTestCase: (testId, data) => request.put(`/testcases/${testId}/move`, data),
   batchMoveTestCases: (data) => request.put('/testcases/batch-move', data),

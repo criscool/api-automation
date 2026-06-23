@@ -120,8 +120,8 @@ backend/generated_ui_tests/midscene_run/
 # 旧的自包含脚本（迁移到 testcases/ 后废弃）
 backend/generated_tests/api_test_*/
 
-# AI 生成的测试用例（不入库，运行时生成）
-backend/generated_tests/testcases/
+# AI 生成的测试文件（不入库），但保留 conftest 等基础文件
+backend/generated_tests/testcases/test_*
 
 # 文档目录（本地参考，不推送）
 docs/ui-automation/

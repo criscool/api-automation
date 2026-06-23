@@ -326,6 +326,23 @@ async def get_test_case_detail(test_id: str):
         raise HTTPException(status_code=500, detail=f"获取用例详情失败: {str(e)}")
 
 
+class UpdateTestCaseRequest(BaseModel):
+    """更新用例请求"""
+    name: Optional[str] = Field(None, description="用例名称")
+
+
+@router.put("/{test_id}", summary="更新用例信息")
+async def update_test_case(test_id: str, request: UpdateTestCaseRequest):
+    """更新用例（目前支持修改名称）"""
+    tc = await TestCase.filter(test_id=test_id, is_active=True).first()
+    if not tc:
+        raise HTTPException(status_code=404, detail=f"用例不存在: {test_id}")
+    if request.name is not None:
+        tc.name = request.name.strip() or tc.name
+        await tc.save(update_fields=["name"])
+    return {"code": 200, "msg": "OK", "data": {"test_id": test_id, "name": tc.name}, "success": True}
+
+
 @router.delete("/{test_id}", summary="删除用例（软删除）")
 async def delete_test_case(test_id: str):
     """软删除用例"""

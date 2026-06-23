@@ -927,7 +927,7 @@ class ApiAnalyzerAgent(BaseApiAutomationAgent):
                 test_cases=test_cases,
                 dependencies=output.dependencies,  # 传递依赖关系
                 execution_groups=output.execution_groups,
-                generation_options={}
+                generation_options={"isolated_mode": True}
             )
 
             # 发送到脚本生成智能体

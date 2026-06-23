@@ -799,6 +799,7 @@ class TestCaseGeneratorAgent(BaseApiAutomationAgent):
             # 构建增强的生成选项
             enhanced_generation_options = {
                 **original_input.generation_options,
+                "isolated_mode": True,  # 每次生成创建独立脚本文件，不覆盖已存在的用例
                 "test_case_count": len(output.test_cases),
                 "coverage_percentage": output.coverage_report.get("coverage_percentage", 0),
                 "generation_method": output.generation_summary.get("generation_method", "intelligent"),

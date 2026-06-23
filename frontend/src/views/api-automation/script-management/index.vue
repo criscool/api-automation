@@ -118,7 +118,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <n-form-item label="用例名称" path="scriptName">
-                    <n-input v-model:value="scriptForm.scriptName" readonly />
+                    <n-input v-model:value="scriptForm.scriptName" />
                   </n-form-item>
 
                   <n-form-item label="测试类型" path="testType">
@@ -273,6 +273,7 @@
           </n-space>
 
           <n-space>
+            <n-button @click="saveScript" type="primary" :loading="saving">保存</n-button>
             <n-button @click="showScriptModal = false">关闭</n-button>
           </n-space>
         </div>
@@ -1099,12 +1100,13 @@ const debugScript = async () => {
 const saveScript = async () => {
   saving.value = true
   try {
-    const scriptId = selectedScript.value.script_id || selectedScript.value.scriptId
-    await api.updateScriptStatus(scriptId, {
-      ...scriptForm.value
-    })
-    
+    const testId = selectedScript.value.test_id
+    if (testId && scriptForm.value.scriptName) {
+      await api.updateTestCase(testId, { name: scriptForm.value.scriptName })
+    }
     message.success('保存成功')
+    showScriptModal.value = false
+    loadTestScripts()
     showScriptModal.value = false
     loadTestScripts()
   } catch (error) {
