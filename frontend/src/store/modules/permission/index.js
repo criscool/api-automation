@@ -25,8 +25,11 @@ function buildRoutes(routes = []) {
 
     if (e.children && e.children.length > 0) {
       // 有子菜单
+      // 注意：route.name 必须全局唯一,Vue Router 同名会互相覆盖。
+      // 后端不同模块可能存在同名子菜单（如"脚本管理"在 API 和 UI 自动化下都有）,
+      // 这里用 "父path::子name" 作为路由 name 兜底唯一,避免菜单同名导致 404。
       route.children = e.children.map((e_child) => ({
-        name: e_child.name,
+        name: `${e.path}::${e_child.name}`,
         path: e_child.path,
         component: vueModules[`/src/views${e_child.component}/index.vue`],
         isHidden: e_child.is_hidden,

@@ -7,7 +7,7 @@ argon2-cffi-bindings==21.2.0
 asyncclick==8.1.8
 black==24.10.0
 certifi==2024.12.14
-cffi==1.17.1
+cffi==2.0.0
 click==8.1.8
 dictdiffer==0.9.0
 dnspython==2.7.0
@@ -52,7 +52,7 @@ shellingham==1.5.4
 sniffio==1.3.1
 starlette==0.37.2
 tortoise-orm==0.23.0
-typer==0.15.1
+typer==0.26.7
 typing-extensions==4.12.2
 ujson==5.10.0
 uvicorn==0.34.0
@@ -81,6 +81,12 @@ dbutils==3.1.0
 
 # Marker PDF解析相关依赖
 # marker-pdf>=1.6.0  # 与 autogen-core 的 pillow 版本冲突，暂时禁用
+
+# crawl4ai: UI 自动化页面分析 sidecar 升级 —— 2026-06 经 `uv pip install --dry-run` 验证,
+# 0.8.8 已放宽 pillow 依赖,与 autogen-core 0.6.4(pillow>=11)兼容,
+# 无需独立 venv 隔离,主进程可直接 import。配套连带升级:cffi 1.17→2.0, typer 0.15→0.26,
+# cryptography 自动升 46→49(均为 crawl4ai 间接依赖牵引,业务代码未直接 import)
+crawl4ai==0.8.8
 
 apscheduler==3.11.2
 pycryptodome

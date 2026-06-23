@@ -182,37 +182,19 @@
                 <n-space>
                   <n-tag>{{ scriptForm.framework }}</n-tag>
                   <n-tag type="info">{{ scriptForm.language || 'Python' }}</n-tag>
-                  <n-tag type="success" size="small">Monaco Editor</n-tag>
                 </n-space>
-                <n-space>
-                  <n-button size="small" @click="insertTemplate">
-                    <template #icon>
-                      <n-icon><Icon icon="mdi:file-code" /></n-icon>
-                    </template>
-                    插入模板
-                  </n-button>
-                  <n-button size="small" @click="validateCode">
-                    <template #icon>
-                      <n-icon><Icon icon="mdi:check-circle" /></n-icon>
-                    </template>
-                    验证语法
-                  </n-button>
-                </n-space>
+                <n-text depth="3" class="text-xs">
+                  {{ (scriptForm.scriptContent || '').split('\n').length }} 行
+                </n-text>
               </div>
-
-              <!-- 代码编辑器 -->
-              <component
-                :is="codeEditorComponent"
-                v-model="scriptForm.scriptContent"
-                :language="getEditorLanguage()"
-                :height="500"
-                theme="vs-dark"
-                :show-header="true"
-                :placeholder="getEditorPlaceholder()"
-                @change="onCodeChange"
-                @focus="onCodeFocus"
-                @blur="onCodeBlur"
+              <n-code
+                v-if="scriptForm.scriptContent"
+                :code="scriptForm.scriptContent"
+                language="python"
+                show-line-numbers
+                style="max-height: 500px; overflow: auto;"
               />
+              <n-empty v-else description="暂无脚本代码" />
             </div>
           </n-tab-pane>
           
@@ -365,7 +347,7 @@
 <script setup>
 import { ref, computed, onMounted, h, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NTag, NPopover, useMessage } from 'naive-ui'
+import { NButton, NTag, NPopover, NCode, NEmpty, NText, useMessage } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import api from '@/api'
 import { formatTime } from '@/utils'
@@ -961,6 +943,19 @@ const editScript = async (testCase) => {
     message.error('获取用例详情失败: ' + (error.message || '未知错误'))
   }
 
+  // 加载脚本文件源代码（用于"脚本代码" Tab 展示）
+  const scriptId = selectedScript.value?.script_id
+  if (scriptId) {
+    try {
+      const scriptResp = await api.getScriptDetail(scriptId)
+      if (scriptResp?.data?.content) {
+        scriptForm.value.scriptContent = scriptResp.data.content
+      }
+    } catch {
+      console.warn('读取脚本内容失败, script_id:', scriptId)
+    }
+  }
+
   executionHistory.value = []
   showScriptModal.value = true
 }
@@ -1373,10 +1368,6 @@ const getMethodType = (method) => {
 }
 
 onMounted(async () => {
-  // 异步加载Monaco Editor
-  await loadMonacoEditor()
-
-  // 加载页面数据
   loadTestScripts()
   loadEndpoints()
 })

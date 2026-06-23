@@ -193,4 +193,73 @@ export default {
   deleteDoc: (filename) => request.delete(`/docs/${filename}`),
   pinDoc: (filename) => request.post(`/docs/${filename}/pin`),
   unpinDoc: (filename) => request.post(`/docs/${filename}/unpin`),
+
+  // ========================================================================
+  // UI 自动化（阶段二）
+  // ========================================================================
+  uiHealth: () => request.get('/ui-automation/health'),
+  // 截图上传：让浏览器自动带 boundary，不要手动设 Content-Type
+  uiUploadScreenshot: (formData) => request.post('/ui-automation/screenshots/upload', formData),
+  // 页面分析
+  uiAnalyzePage: (data = {}) => request.post('/ui-automation/page-analysis/analyze', data),
+  uiListAnalyses: (params = {}) => request.get('/ui-automation/page-analysis', { params }),
+  uiGetAnalysis: (analysisId) => request.get(`/ui-automation/page-analysis/${analysisId}`),
+  uiDeleteAnalysis: (analysisId) => request.delete(`/ui-automation/page-analysis/${analysisId}`),
+  // SSE 流式 URL（前端 EventSource 用，不走 axios）
+  uiAnalysisStreamUrl: (sessionId) => `/api/v1/ui-automation/page-analysis/stream/${sessionId}`,
+  // 脚本管理
+  uiGenerateScript: (data = {}) => request.post('/ui-automation/scripts/generate', data),
+  uiCreateManualScript: (data = {}) => request.post('/ui-automation/scripts/manual', data),
+  uiListScripts: (params = {}) => request.get('/ui-automation/scripts', { params }),
+  uiGetScript: (scriptId) => request.get(`/ui-automation/scripts/${scriptId}`),
+  uiUpdateScript: (scriptId, data = {}) => request.put(`/ui-automation/scripts/${scriptId}`, data),
+  uiDeleteScript: (scriptId) => request.delete(`/ui-automation/scripts/${scriptId}`),
+  uiCheckScriptStatus: (analysisId) => request.get(`/ui-automation/scripts/check/${analysisId}`),
+
+  // ========================================================================
+  // UI 自动化（阶段三）—— 执行 + 报告
+  // ========================================================================
+  uiTriggerExecution: (data = {}) => request.post('/ui-automation/executions', data),
+  uiListExecutions: (params = {}) => request.get('/ui-automation/executions', { params }),
+  uiGetExecution: (executionId) => request.get(`/ui-automation/executions/${executionId}`),
+  uiCancelExecution: (executionId) => request.post(`/ui-automation/executions/${executionId}/cancel`),
+  // SSE 执行进度流：前端用 EventSource，sessionId 由 query 传
+  uiExecutionStreamUrl: (executionId, sessionId) =>
+    `/api/v1/ui-automation/executions/${executionId}/events?session_id=${encodeURIComponent(sessionId)}`,
+  uiListReports: (params = {}) => request.get('/ui-automation/reports', { params }),
+  uiGetReport: (reportId) => request.get(`/ui-automation/reports/${reportId}`),
+
+  // ---- UI 自动化 - 图片库(阶段四) ----
+  uiUploadLibraryImage: (formData) =>
+    request.post('/ui-automation/image-library/upload', formData),
+  uiListLibraryImages: (params = {}) =>
+    request.get('/ui-automation/image-library', { params }),
+  uiGetLibraryImage: (imageId) =>
+    request.get(`/ui-automation/image-library/${imageId}`),
+  uiUpdateLibraryImage: (imageId, data = {}) =>
+    request.patch(`/ui-automation/image-library/${imageId}`, data),
+  uiDeleteLibraryImage: (imageId, force = false) =>
+    request.delete(`/ui-automation/image-library/${imageId}`, { params: { force } }),
+
+  // ---- UI 自动化 - 录制(阶段四) ----
+  uiCreateRecording: (data = {}) => request.post('/ui-automation/recordings', data),
+  uiListRecordings: (params = {}) => request.get('/ui-automation/recordings', { params }),
+  uiGetRecording: (sessionId) => request.get(`/ui-automation/recordings/${sessionId}`),
+  uiCancelRecording: (sessionId) =>
+    request.post(`/ui-automation/recordings/${sessionId}/cancel`),
+  uiDeleteRecording: (sessionId, purgeRaw = true) =>
+    request.delete(`/ui-automation/recordings/${sessionId}`, { params: { purge_raw: purgeRaw } }),
+  uiRepolishRecording: (sessionId, data = {}) =>
+    request.post(`/ui-automation/recordings/${sessionId}/repolish`, data),
+  // SSE 录制进度流:session_sid 与 path session_id 必须相等
+  uiRecordingStreamUrl: (sessionId) =>
+    `/api/v1/ui-automation/recordings/${sessionId}/events?session_sid=${encodeURIComponent(sessionId)}`,
+
+  // ---- 批量执行 ----
+  uiTriggerBatchExecution: (data = {}) => request.post('/ui-automation/batches', data),
+  uiListBatches: (params = {}) => request.get('/ui-automation/batches', { params }),
+  uiGetBatch: (batchId) => request.get(`/ui-automation/batches/${batchId}`),
+  uiCancelBatch: (batchId) => request.post(`/ui-automation/batches/${batchId}/cancel`),
+  uiBatchEventsUrl: (batchId, sessionId) =>
+    `/api/v1/ui-automation/batches/${batchId}/events?session_id=${encodeURIComponent(sessionId)}`,
 }

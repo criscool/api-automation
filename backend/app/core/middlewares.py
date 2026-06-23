@@ -208,6 +208,12 @@ class HttpAuditLogMiddleware(BaseHTTPMiddleware):
         request.state.request_args = request_args
 
     async def after_request(self, request: Request, response: Response, process_time: int):
+        # SSE / 长流式响应禁止读取 body —— body_iterator 是无尽流,
+        # 一旦 async for 它就会永远卡住,把 worker 占住、前端拿不到事件、整个进程僵死。
+        content_type = response.headers.get("content-type", "") if response is not None else ""
+        if content_type.startswith("text/event-stream"):
+            return response
+
         if request.method in self.methods:
             for path in self.exclude_paths:
                 if re.search(path, request.url.path, re.I) is not None:

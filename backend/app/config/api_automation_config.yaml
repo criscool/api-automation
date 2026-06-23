@@ -206,3 +206,45 @@ extensions:
   custom_generators: []
   custom_executors: []
   plugins_dir: "./plugins"
+
+# ============================================================
+# 大模型注册表（多模型并存）
+# - 通过 get_model_client("xxx") 按 key 取用
+# - api_key 与 base_url 均通过 *_env 字段映射到环境变量，避免落盘
+# - 任一 *_env 留空或环境变量缺失时，对应字段使用 default 值
+# - alias_of 用于软链，避免重复配置
+# ============================================================
+llm_models:
+  # 默认模型：兼容旧调用 get_model_client()
+  default:
+    alias_of: "deepseek"
+
+  # DeepSeek（文本主力，沿用现有 .env 中的 LLM_*）
+  deepseek:
+    api_key_env: "LLM_API_KEY"
+    base_url_env: "LLM_BASE_URL"
+    base_url_default: "https://api.deepseek.com/v1"
+    model_env: "LLM_MODEL"
+    model_default: "deepseek-chat"
+    model_info:
+      vision: false
+      function_calling: true
+      json_output: true
+      structured_output: true
+      family: "deepseek"
+      multiple_system_messages: true
+
+  # 豆包视觉模型（阶段二新增，用于页面截图分析）
+  doubao_vision:
+    api_key_env: "DOUBAO_API_KEY"
+    base_url_env: "DOUBAO_BASE_URL"
+    base_url_default: "https://ark.cn-beijing.volces.com/api/v3"
+    model_env: "DOUBAO_VISION_MODEL"
+    model_default: "doubao-1.5-vision-pro-32k-250115"
+    model_info:
+      vision: true
+      function_calling: false
+      json_output: true
+      structured_output: false
+      family: "doubao"
+      multiple_system_messages: false

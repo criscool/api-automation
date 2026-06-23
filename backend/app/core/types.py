@@ -21,10 +21,28 @@ class AgentTypes(Enum):
     TEST_ANALYSIS = "test_analysis"
     TEST_HEALER = "test_healer"
 
+    # ============== UI 自动化智能体（阶段二新增） ==============
+    UI_PAGE_ANALYZER = "ui_page_analyzer"             # 门面 Agent，编排 GroupChat
+    UI_SCRIPT_GENERATOR = "ui_script_generator"       # 三模板脚本生成
+    UI_ELEMENT_RECOGNIZER = "ui_element_recognizer"   # GroupChat 子：视觉元素识别
+    UI_INTERACTION_ANALYST = "ui_interaction_analyst" # GroupChat 子：交互流程分析
+    UI_TESTCASE_DESIGNER = "ui_testcase_designer"     # GroupChat 子：测试用例设计
+
+    # ============== UI 自动化智能体（阶段三新增） ==============
+    UI_SCRIPT_EXECUTOR = "ui_script_executor"         # 单脚本执行编排（subprocess + SSE 进度）
+    UI_DATA_PERSISTENCE = "ui_data_persistence"       # 执行结果落库（执行记录 + 报告 + 产物）
+
+    # ============== UI 自动化智能体（阶段四：录制与修复） ==============
+    UI_RECORDING_ORCHESTRATOR = "ui_recording_orchestrator"  # codegen 录制编排 + AI 后处理
+
+    # ============== UI 自动化智能体（阶段五：批量执行） ==============
+    UI_BATCH_EXECUTOR = "ui_batch_executor"  # 批次执行编排
+
 
 class AgentPlatform(Enum):
     """智能体平台类型"""
     API_AUTOMATION = "api_automation"
+    UI_AUTOMATION = "ui_automation"  # 阶段二新增
 
 
 class MessageRegion(Enum):
@@ -46,6 +64,23 @@ class TopicTypes(Enum):
     TEST_SCRIPT_GENERATOR = "test_script_generator"
     TEST_EXECUTOR = "test_executor"
     LOG_RECORDER = "log_recorder"
+
+    # ============== UI 自动化相关主题（阶段二新增） ==============
+    UI_PAGE_ANALYZER = "ui_page_analyzer"
+    UI_SCRIPT_GENERATOR = "ui_script_generator"
+    UI_ELEMENT_RECOGNIZER = "ui_element_recognizer"
+    UI_INTERACTION_ANALYST = "ui_interaction_analyst"
+    UI_TESTCASE_DESIGNER = "ui_testcase_designer"
+
+    # ============== UI 自动化相关主题（阶段三新增） ==============
+    UI_SCRIPT_EXECUTOR = "ui_script_executor"
+    UI_DATA_PERSISTENCE = "ui_data_persistence"
+
+    # ============== UI 自动化相关主题（阶段四：录制与修复） ==============
+    UI_RECORDING_ORCHESTRATOR = "ui_recording_orchestrator"
+
+    # ============== UI 自动化相关主题（阶段五：批量执行） ==============
+    UI_BATCH_EXECUTOR = "ui_batch_executor"
 
     # 系统主题
     STREAM_OUTPUT = "stream_output"
@@ -108,6 +143,18 @@ AGENT_NAMES: Dict[str, str] = {
     AgentTypes.CATEGORY_RULE_RECOMMENDER.value: "分类规则推荐智能体",
     AgentTypes.TEST_ANALYSIS.value: "测试失败分析智能体",
     AgentTypes.TEST_HEALER.value: "测试脚本修复智能体",
+    # UI 自动化智能体（阶段二新增）
+    AgentTypes.UI_PAGE_ANALYZER.value: "UI页面分析智能体",
+    AgentTypes.UI_SCRIPT_GENERATOR.value: "UI脚本生成智能体",
+    AgentTypes.UI_ELEMENT_RECOGNIZER.value: "UI元素识别专家",
+    AgentTypes.UI_INTERACTION_ANALYST.value: "交互流程分析师",
+    AgentTypes.UI_TESTCASE_DESIGNER.value: "UI测试用例设计师",
+    # UI 自动化智能体（阶段三新增）
+    AgentTypes.UI_SCRIPT_EXECUTOR.value: "UI脚本执行智能体",
+    AgentTypes.UI_DATA_PERSISTENCE.value: "UI数据持久化智能体",
+    # UI 自动化智能体（阶段四：录制与修复）
+    AgentTypes.UI_RECORDING_ORCHESTRATOR.value: "UI录制编排智能体",
+    AgentTypes.UI_BATCH_EXECUTOR.value: "UI批次执行智能体",
 }
 
 

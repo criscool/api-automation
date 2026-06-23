@@ -1,0 +1,38 @@
+# 依赖
+node_modules/
+
+# 环境变量(只允许 .env.example 入库)
+.env
+.env.local
+.env.*.local
+
+# Playwright storageState 落点(auth.setup.ts 产出的登录态,含 cookies,严禁入库)
+/.auth/
+
+# TS 构建缓存
+*.tsbuildinfo
+
+# Playwright 默认产物路径
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
+# 后端 PW_OUTPUT_DIR / PW_HTML_REPORT_DIR / PW_JSON_REPORT_FILE 默认值落地点
+/reports/test-results/
+/reports/html/
+/reports/results.json
+
+# 执行期产物(后端按执行 ID 落到独立子目录)
+/reports/exec_*/
+/videos/exec_*/
+/logs/exec_*/
+
+# 兜底:执行期生成的视频/日志文件
+/videos/**/*.webm
+/videos/**/*.mp4
+/videos/**/*.zip
+/logs/**/*.log
+
+# 保留各目录 .gitkeep,确保空目录入库
+!**/.gitkeep

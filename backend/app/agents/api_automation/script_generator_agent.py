@@ -1340,14 +1340,14 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
             def _norm(s: str) -> str:
                 return re.sub(r"[^a-z0-9]", "", s.lower())
             mn_norm = _norm(method_name)
-            last_url = urls[-1]
+            first_url = urls[0]  # 主操作 URL，不是验证用的最后一个
             scored: List[Tuple[int, ParsedEndpoint]] = []
             for ep in candidates:
                 score = 0
                 tail_norm = _norm(path_tail(ep.path))
                 if tail_norm and tail_norm in mn_norm:
                     score += 100
-                if url_matches_endpoint(last_url, ep):
+                if url_matches_endpoint(first_url, ep):
                     score += 10
                 scored.append((score, ep))
             scored.sort(key=lambda x: -x[0])

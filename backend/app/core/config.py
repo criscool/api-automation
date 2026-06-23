@@ -19,6 +19,14 @@ class Settings(BaseSettings):
     LLM_API_KEY: Optional[str] = None
     LLM_BASE_URL: str = "https://api.deepseek.com/v1"
     LLM_MODEL: str = "deepseek-chat"
+
+    # 豆包视觉模型（阶段二新增，用于 UI 页面截图分析）
+    DOUBAO_API_KEY: Optional[str] = None
+    DOUBAO_BASE_URL: Optional[str] = None
+    DOUBAO_VISION_MODEL: Optional[str] = None
+
+    # UI 自动化模块 kill switch（一期默认关闭，二期打开后才注册 UI 智能体）
+    UI_AUTOMATION_ENABLED: bool = False
     
     # API自动化配置
     API_AUTOMATION_ENABLED: bool = True

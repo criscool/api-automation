@@ -102,8 +102,32 @@ allure-results/
 allure-report/
 test-results/
 
+# UI 自动化产物（generated_ui_tests/ 本身保留，仅忽略运行产物）
+backend/generated_ui_tests/reports/*
+!backend/generated_ui_tests/reports/.gitkeep
+backend/generated_ui_tests/screenshots/*
+!backend/generated_ui_tests/screenshots/.gitkeep
+backend/generated_ui_tests/videos/*
+!backend/generated_ui_tests/videos/.gitkeep
+backend/generated_ui_tests/logs/*
+!backend/generated_ui_tests/logs/.gitkeep
+backend/generated_ui_tests/node_modules/
+backend/generated_ui_tests/test-results/
+backend/generated_ui_tests/playwright-report/
+backend/generated_ui_tests/.playwright/
+backend/generated_ui_tests/midscene_run/
+
 # 旧的自包含脚本（迁移到 testcases/ 后废弃）
 backend/generated_tests/api_test_*/
+
+# AI 生成的测试用例（不入库，运行时生成）
+backend/generated_tests/testcases/
+
+# 文档目录（本地参考，不推送）
+docs/ui-automation/
+
+# Claude Code 本地配置
+.claude/
 
 # 生成的临时数据
 temp/
@@ -200,6 +224,9 @@ ui-automation/*
 
 # 临时输出目录
 outputs/
+
+# 开发验证脚本（_test_s*.py）
+backend/_test_s*.py
 
  AGENTS.md
 

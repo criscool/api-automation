@@ -1,0 +1,9 @@
+{
+  "name": "mcp-playwright-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clean Playwright runtime for MCP test recording (no midscene, no dual-instance conflict)",
+  "devDependencies": {
+    "@playwright/test": "^1.60.0"
+  }
+}

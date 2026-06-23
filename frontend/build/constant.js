@@ -29,4 +29,13 @@ export const PROXY_CONFIG = {
     target: 'http://127.0.0.1:9999',
     changeOrigin: true,
   },
+  /**
+   * @desc    UI 自动化 Playwright 报告静态资源，挂在后端 /static/ui-reports
+   * @请求路径  http://localhost:3100/static/ui-reports/exec_xxx/html/index.html
+   * @转发路径  http://localhost:9999/static/ui-reports/exec_xxx/html/index.html
+   */
+  '/static': {
+    target: 'http://127.0.0.1:9999',
+    changeOrigin: true,
+  },
 }

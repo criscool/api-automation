@@ -1,0 +1,53 @@
+"""
+UI 自动化执行会话自愈服务(阶段三 P3-06)
+
+职责:
+- 后端进程启动时,把 ui_script_executions 中 status='running' 或 status='pending' 的"上次未完结"
+  执行记录批量改为 'interrupted',避免前端永远转圈
+- 不杀真实子进程(进程已随后端重启而死),只修 DB
+
+零回归:
+- 仅在 settings.UI_AUTOMATION_ENABLED=True 时被 lifespan 调用
+- 只 UPDATE 一张 ui_ 前缀表,不触碰 API 自动化业务表
+"""
+from __future__ import annotations
+
+from datetime import datetime
+
+from loguru import logger
+
+
+async def heal_dangling_executions() -> int:
+    """把所有 running/pending 的执行记录改为 interrupted,返回受影响行数。
+
+    场景:后端进程崩溃 / 重启时,正在跑的执行会"挂"在 running 状态。
+    启动时一次性扫描修正,避免前端列表里永远显示"运行中"。
+    """
+    try:
+        from app.models.ui_automation import UiScriptExecution
+    except Exception as e:
+        logger.warning(f"加载 UiScriptExecution 失败,跳过自愈: {e}")
+        return 0
+
+    try:
+        dangling_qs = UiScriptExecution.filter(status__in=["running", "pending"])
+        ids = [row.execution_id for row in await dangling_qs.only("execution_id").all()]
+        if not ids:
+            return 0
+
+        now = datetime.now()
+        affected = await UiScriptExecution.filter(execution_id__in=ids).update(
+            status="interrupted",
+            end_time=now,
+            error_message="后端重启时检测到未完结执行,自动标记为 interrupted",
+        )
+        logger.info(
+            f"UI 执行自愈完成: {affected} 条 running/pending 记录改为 interrupted"
+        )
+        return affected
+    except Exception as e:
+        logger.error(f"UI 执行自愈失败: {e}")
+        return 0
+
+
+__all__ = ["heal_dangling_executions"]

@@ -1,0 +1,29 @@
+{
+  "name": "ui-automation-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "description": "UI 自动化测试运行时:Playwright + MidScene.js + 自定义 helpers。由后端 UiScriptExecutorAgent 调度 subprocess 执行。",
+  "engines": {
+    "node": ">=18.17.0"
+  },
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:report": "playwright show-report reports/html",
+    "yaml": "midscene-yaml",
+    "install:chromium": "playwright install chromium --with-deps"
+  },
+  "dependencies": {
+    "@midscene/cli": "^0.16.0",
+    "@midscene/web": "^0.16.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0",
+    "@types/node": "^20.11.30",
+    "typescript": "^5.4.5"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["puppeteer", "sharp"]
+  }
+}

@@ -13,6 +13,7 @@ if __name__ == "__main__":
     # 写入的目录显式排除，否则 generated_tests/ uploads/ 等下的 .py 写入会触发 reload。
     exclude_candidates = [
         "generated_tests",  # AI 生成的测试脚本和 allure 报告
+        "generated_ui_tests",  # UI 自动化脚本/产物/截图
         "uploads",          # 上传的接口文档
         "reports",          # pytest 执行报告
         "logs",             # 运行日志

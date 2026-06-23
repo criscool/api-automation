@@ -26,8 +26,25 @@
         </n-button>
       </div>
     </div>
-    <div 
-      ref="editorContainer" 
+    <!-- 加载失败时的 fallback -->
+    <div v-if="initError" class="editor-fallback" :style="{ height: height + 'px' }">
+      <div class="fallback-inner">
+        <n-alert type="warning" title="编辑器加载失败" class="mb-4">
+          代码编辑器未能初始化，可能是网络或浏览器兼容性问题。
+        </n-alert>
+        <n-code
+          v-if="modelValue"
+          :code="modelValue"
+          :language="language"
+          show-line-numbers
+          style="max-height: 400px; overflow: auto;"
+        />
+        <span v-else class="text-gray-400">暂无代码内容</span>
+      </div>
+    </div>
+    <div
+      v-else
+      ref="editorContainer"
       class="editor-content"
       :style="{ height: height + 'px' }"
     ></div>
@@ -36,7 +53,7 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
-import { NButton, NTag, NIcon } from 'naive-ui'
+import { NButton, NTag, NIcon, NAlert, NCode } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import * as monaco from 'monaco-editor'
 
@@ -78,6 +95,7 @@ const emit = defineEmits(['update:modelValue', 'change', 'focus', 'blur'])
 // Refs
 const editorContainer = ref(null)
 const editor = ref(null)
+const initError = ref(false)  // 编辑器初始化失败时展示 fallback
 const formatting = ref(false)
 const showMinimap = ref(true)
 const wordWrap = ref(false)
@@ -179,6 +197,7 @@ const initEditor = async () => {
     console.log('Monaco Editor 初始化成功')
   } catch (error) {
     console.error('Monaco Editor 初始化失败:', error)
+    initError.value = true
   }
 }
 
@@ -376,6 +395,19 @@ defineExpose({
 
 .editor-content {
   width: 100%;
+}
+
+.editor-fallback {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px;
+  background: #1e1e1e;
+}
+
+.fallback-inner {
+  width: 100%;
+  max-width: 800px;
 }
 
 /* 深色主题下的样式调整 */

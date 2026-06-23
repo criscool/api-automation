@@ -1,5 +1,14 @@
-from contextlib import asynccontextmanager
+import sys
 import asyncio
+
+# Windows + uvicorn reload 模式下,worker 进程默认 _WindowsSelectorEventLoop,
+# 不支持 asyncio.create_subprocess_exec(执行 Playwright 时直接 NotImplementedError)。
+# 必须在 import FastAPI / asyncio.run 之前切到 Proactor,reload watcher 跑在 parent
+# 进程不受影响。
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -40,6 +49,26 @@ async def lifespan(app: FastAPI):
 
     from app.models.api_automation import _ensure_migration_test_script_heal_fields
     await _ensure_migration_test_script_heal_fields()
+
+    # UI 自动化模块（一期）—— 仅在 UI_AUTOMATION_ENABLED=True 时建表 + 注册菜单
+    if settings.UI_AUTOMATION_ENABLED:
+        from app.models.ui_automation import _ensure_migration_ui_automation_tables
+        await _ensure_migration_ui_automation_tables()
+
+        # 幂等迁移：把旧的"一级菜单"占位改造成"UI自动化"，或全新创建
+        from app.core.init_app import _ensure_menu_ui_automation
+        await _ensure_menu_ui_automation()
+
+        # 阶段三 P3-06:后端重启自愈 —— 把残留 running/pending 标记为 interrupted
+        try:
+            from app.services.ui_automation.session_service import heal_dangling_executions
+            await asyncio.wait_for(heal_dangling_executions(), timeout=5)
+        except asyncio.TimeoutError:
+            from loguru import logger
+            logger.warning("UI 执行自愈超时,跳过")
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"UI 执行自愈失败: {e}")
 
     # 初始化API自动化编排器
     try:
@@ -92,6 +121,18 @@ async def lifespan(app: FastAPI):
         from loguru import logger
         logger.error(f"初始化定时任务调度器失败: {str(e)}")
 
+    # UI 自动化产物清理任务(阶段三 P3-09):复用同一 APScheduler 实例
+    if settings.UI_AUTOMATION_ENABLED:
+        try:
+            from app.services.api_automation.scheduled_task_service import get_scheduled_task_service
+            from app.services.ui_automation.cleanup_service import register_cleanup_job
+            _scheduler = get_scheduled_task_service()
+            if _scheduler._scheduler is not None:
+                register_cleanup_job(_scheduler._scheduler)
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"注册 UI 产物清理任务失败: {e}")
+
     yield
 
     # 关闭定时任务调度器
@@ -123,6 +164,29 @@ def create_app() -> FastAPI:
     reports_dir = Path(__file__).resolve().parent.parent / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     app.mount("/reports", StaticFiles(directory=str(reports_dir), html=True), name="reports")
+
+    # UI 自动化报告静态资源(阶段三 P3-06):仅在开关开启时挂载,
+    # 指向 UI_ARTIFACT_DIR (默认 backend/generated_ui_tests/reports/)
+    # 前端通过 /static/ui-reports/exec_<id>/html/index.html 加载报告 iframe
+    if settings.UI_AUTOMATION_ENABLED:
+        ui_artifact_dir = Path(settings.UI_ARTIFACT_DIR)
+        ui_artifact_dir.mkdir(parents=True, exist_ok=True)
+        app.mount(
+            "/static/ui-reports",
+            StaticFiles(directory=str(ui_artifact_dir), html=True),
+            name="ui-reports",
+        )
+
+        # UI 图片库静态资源(阶段四):指向 {UI_AUTOMATION_WORKSPACE}/image_library
+        # 前端用 /static/ui-images/thumbnails/<image_id>.jpg 直接显示缩略图,
+        # 避免每张图都走鉴权接口拖累列表渲染。
+        ui_image_dir = Path(settings.UI_AUTOMATION_WORKSPACE) / "image_library"
+        ui_image_dir.mkdir(parents=True, exist_ok=True)
+        app.mount(
+            "/static/ui-images",
+            StaticFiles(directory=str(ui_image_dir), html=False),
+            name="ui-images",
+        )
 
     return app
 

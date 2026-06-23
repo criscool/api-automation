@@ -46,6 +46,10 @@ def make_middlewares():
                 "/api/v1/base/access_token",
                 "/docs",
                 "/openapi.json",
+                # SSE / 流式接口必须排除 —— middlewares.HttpAuditLogMiddleware
+                # 一旦尝试 async for response.body_iterator 就会卡死整个 worker
+                r"/stream",
+                r"/events",
             ],
         ),
     ]
@@ -163,17 +167,32 @@ async def init_menus():
         ]
         await Menu.bulk_create(children_menu)
         await Menu.create(
-            menu_type=MenuType.MENU,
-            name="一级菜单",
-            path="/top-menu",
+            menu_type=MenuType.CATALOG,
+            name="UI自动化",
+            path="/ui-automation",
             order=2,
             parent_id=0,
-            icon="material-symbols:featured-play-list-outline",
+            icon="material-symbols:web",
             is_hidden=False,
-            component="/top-menu",
+            component="Layout",
             keepalive=False,
-            redirect="",
+            redirect="/ui-automation/dashboard",
         )
+        ui_auto_parent = await Menu.filter(name="UI自动化", parent_id=0).first()
+        ui_auto_children = [
+            Menu(
+                menu_type=MenuType.MENU,
+                name="UI自动化仪表板",
+                path="dashboard",
+                order=1,
+                parent_id=ui_auto_parent.id,
+                icon="carbon:dashboard",
+                is_hidden=False,
+                component="/ui-automation/dashboard",
+                keepalive=False,
+            ),
+        ]
+        await Menu.bulk_create(ui_auto_children)
 
         # API自动化菜单
         api_auto_menu = await Menu.create(
@@ -290,6 +309,138 @@ async def init_menus():
             ),
         ]
         await Menu.bulk_create(api_auto_children)
+
+
+async def _ensure_menu_ui_automation():
+    """幂等迁移：把占位"一级菜单"改造成"UI自动化"，并补齐阶段二/三的占位子菜单
+
+    零回归保障：
+    - 不删除任何现有菜单，仅 update 占位菜单或新增 UI自动化菜单
+    - 跑 100 次结果一致
+    - 同时确保 UI自动化 一级菜单下子菜单齐全（dashboard 必有，其余占位先建）
+    """
+    from loguru import logger
+
+    # UI 自动化一级菜单 + 完整子菜单清单（按阶段二/三规划）
+    ui_children_spec = [
+        {
+            "name": "UI自动化仪表板",
+            "path": "dashboard",
+            "order": 1,
+            "icon": "carbon:dashboard",
+            "component": "/ui-automation/dashboard",
+        },
+        {
+            "name": "图片库",
+            "path": "image-library",
+            "order": 2,
+            "icon": "mdi:image-multiple-outline",
+            "component": "/ui-automation/image-library",
+        },
+        {
+            "name": "页面分析",
+            "path": "page-analysis",
+            "order": 3,
+            "icon": "mdi:image-search-outline",
+            "component": "/ui-automation/page-analysis",
+        },
+        {
+            "name": "录制管理",
+            "path": "recording-management",
+            "order": 4,
+            "icon": "mdi:record-rec",
+            "component": "/ui-automation/recording-management",
+        },
+        {
+            "name": "脚本管理",
+            "path": "script-management",
+            "order": 5,
+            "icon": "mdi:script-text-outline",
+            "component": "/ui-automation/script-management",
+        },
+        {
+            "name": "执行报告",
+            "path": "execution-reports",
+            "order": 6,
+            "icon": "mdi:file-chart",
+            "component": "/ui-automation/execution-reports",
+        },
+    ]
+
+    async def _ensure_children(parent_id: int):
+        for spec in ui_children_spec:
+            existing = await Menu.filter(parent_id=parent_id, path=spec["path"]).first()
+            if existing:
+                # 校准 order/icon/component,允许 spec 调整顺序后重启即生效
+                dirty = False
+                if existing.order != spec["order"]:
+                    existing.order = spec["order"]
+                    dirty = True
+                if existing.icon != spec["icon"]:
+                    existing.icon = spec["icon"]
+                    dirty = True
+                if existing.component != spec["component"]:
+                    existing.component = spec["component"]
+                    dirty = True
+                if existing.name != spec["name"]:
+                    existing.name = spec["name"]
+                    dirty = True
+                if dirty:
+                    await existing.save()
+            else:
+                await Menu.create(
+                    menu_type=MenuType.MENU,
+                    name=spec["name"],
+                    path=spec["path"],
+                    order=spec["order"],
+                    parent_id=parent_id,
+                    icon=spec["icon"],
+                    is_hidden=False,
+                    component=spec["component"],
+                    keepalive=False,
+                )
+
+    # 1. 已有"UI自动化"菜单 → 补齐缺失子菜单
+    ui_auto = await Menu.filter(name="UI自动化", parent_id=0).first()
+    if ui_auto:
+        await _ensure_children(ui_auto.id)
+        # 把新增的子菜单同步分配给所有角色，避免非超级用户拿不到
+        for role in await Role.all():
+            for spec in ui_children_spec:
+                child = await Menu.filter(parent_id=ui_auto.id, path=spec["path"]).first()
+                if child and not await role.menus.filter(id=child.id).exists():
+                    await role.menus.add(child)
+        return
+
+    # 2. 改造占位"一级菜单"（旧库可能存在）
+    legacy = await Menu.filter(name="一级菜单", parent_id=0, path="/top-menu").first()
+    if legacy:
+        legacy.name = "UI自动化"
+        legacy.path = "/ui-automation"
+        legacy.icon = "material-symbols:web"
+        legacy.menu_type = MenuType.CATALOG
+        legacy.component = "Layout"
+        legacy.redirect = "/ui-automation/dashboard"
+        await legacy.save()
+        await _ensure_children(legacy.id)
+        logger.info(f"UI自动化菜单：已将占位'一级菜单'改造为'UI自动化'（id={legacy.id}）+ 子菜单")
+        return
+
+    # 3. 全新创建
+    ui_auto = await Menu.create(
+        menu_type=MenuType.CATALOG,
+        name="UI自动化",
+        path="/ui-automation",
+        order=2,
+        parent_id=0,
+        icon="material-symbols:web",
+        is_hidden=False,
+        component="Layout",
+        keepalive=False,
+        redirect="/ui-automation/dashboard",
+    )
+    await _ensure_children(ui_auto.id)
+    logger.info("UI自动化菜单：已全新创建 + 占位子菜单")
 
 
 async def init_apis():
@@ -436,6 +587,7 @@ async def init_data():
     await init_db()
     await init_superuser()
     await init_menus()
+    await _ensure_menu_ui_automation()
     await ensure_hidden_api_automation_menus()
     await ensure_new_api_automation_menus()
     await init_apis()
