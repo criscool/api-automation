@@ -65,6 +65,22 @@ def resolve_step_ref(ref: Any, ctx: Dict[int, Dict[str, Any]]) -> Any:
     return ((ctx.get(step_no) or {}).get("dataOut") or {}).get(var)
 
 
+# 匹配路径中内嵌的 step:N.dataOut.X（非锚定，支持在 JSONPath filter 中使用）
+_STEP_REF_INLINE_RE = re.compile(r"step:(\d+)\.dataOut\.([a-zA-Z_][a-zA-Z0-9_]*)")
+
+
+def _resolve_step_refs_in_path(path: str, ctx: Dict[int, Dict[str, Any]]) -> str:
+    """将路径中所有 step:N.dataOut.X 替换为 ctx 中的实际值。
+    例如: "[?(@._id==step:3.dataOut.strategyId)]" → "[?(@._id==6a39...)]"
+    """
+    def _replacer(m: re.Match) -> str:
+        step_no = int(m.group(1))
+        var = m.group(2)
+        val = ((ctx.get(step_no) or {}).get("dataOut") or {}).get(var)
+        return str(val) if val is not None else m.group(0)
+    return _STEP_REF_INLINE_RE.sub(_replacer, path)
+
+
 def resolve_path(obj: Any, path: str) -> Any:
     """按点路径取值，支持 [] / [N] / [k=v]。空路径返回原对象。
     以 'response.' 开头的前缀会被剥掉（response 是 root 别名）。
@@ -313,7 +329,7 @@ def _flatten(value: Any) -> List[Any]:
 
 
 def _assert_find(resp, spec, ctx, *, expect: bool, step_no):
-    in_path = spec.get("in", "")
+    in_path = _resolve_step_refs_in_path(spec.get("in", ""), ctx)
     target = _resolve_target(spec, ctx)
     actual = resolve_path(resp, in_path)
     if actual is None:
@@ -334,7 +350,7 @@ def _assert_find(resp, spec, ctx, *, expect: bool, step_no):
 
 
 def _assert_every(resp, spec, ctx, *, step_no):
-    in_path = spec.get("in", "")
+    in_path = _resolve_step_refs_in_path(spec.get("in", ""), ctx)
     target = _resolve_target(spec, ctx)
     actual = resolve_path(resp, in_path)
     if actual is None:
@@ -350,7 +366,7 @@ def _assert_every(resp, spec, ctx, *, step_no):
 
 
 def _assert_equals(resp, spec, ctx, *, step_no, expect_equal: bool = True):
-    in_path = spec.get("in", spec.get("path", ""))
+    in_path = _resolve_step_refs_in_path(spec.get("in", spec.get("path", "")), ctx)
     target = _resolve_target(spec, ctx)
     actual = resolve_path(resp, in_path)
     equal = _values_equal(actual, target)
@@ -365,7 +381,7 @@ def _assert_equals(resp, spec, ctx, *, step_no, expect_equal: bool = True):
 
 
 def _assert_compare(resp, spec, ctx, *, op, step_no):
-    in_path = spec.get("in", spec.get("path", ""))
+    in_path = _resolve_step_refs_in_path(spec.get("in", spec.get("path", "")), ctx)
     target = _resolve_target(spec, ctx)
     actual = resolve_path(resp, in_path)
     a_num = _coerce_number(actual)
