@@ -124,6 +124,9 @@ backend/generated_tests/api_test_*/
 # AI 生成的测试文件（不入库），但保留 conftest 等基础文件
 backend/generated_tests/testcases/test_*
 
+# AI 生成的 API 封装模块（不入库，运行时生成）
+backend/generated_tests/automation/api/modules/*_api.py
+
 # 文档目录（本地参考，不推送）
 docs/ui-automation/
 
