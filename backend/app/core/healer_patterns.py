@@ -72,6 +72,12 @@ KNOWN_ANTIPATTERNS: List[Dict[str, str]] = [
         "rule": "字段名是 streamIds 看似复数，但后端要求传字符串而非列表",
         "fix_hint": "用逗号分隔的字符串 'id1,id2'，不是 ['id1', 'id2']",
     },
+    {
+        "id": "strategy_add_required_fields",
+        "module": "策略",
+        "rule": "策略新增接口 body 有 5 个必填字符串: frequency / time / hour / deadline / description，服务端报 Null 时通常一次只报第一个，实际 5 个都缺",
+        "fix_hint": "payload 补齐 frequency='', time='', hour='', deadline='', description=''（空字符串即可）",
+    },
 ]
 
 

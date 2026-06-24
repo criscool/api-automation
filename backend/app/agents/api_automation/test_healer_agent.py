@@ -178,6 +178,7 @@ class TestHealerAgent(BaseApiAutomationAgent):
 4. **优先改 payload / header / 参数；尽量不改 assert 语句**（除非断言本身写错）
 5. 不允许引入 `requests.delete`、`os.system`、`subprocess`、`shutil.rmtree` 等危险调用
 6. **HTTP 方法选择**：见下方"本脚本 HTTP 方法分布"。修 405 错误时**沿用本脚本主导方法**，不要凭 RESTful 直觉随意改成 DELETE/PATCH 等
+7. **Java 反序列化 Null 字段**：当服务端返回 `Cannot construct instance...problem: Null <字段名>` 时，payload 通常**不止缺这一个字段**（Java 报错只显示第一个 null）。需要补全该接口所有必填的字符串/数组字段，空字符串 `''` 或空数组 `[]` 即可
 
 ## 上一步的分析结论
 - verdict: {analysis.get('verdict', '')}

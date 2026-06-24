@@ -6,6 +6,8 @@ const HEADLESS = (process.env.UI_HEADLESS ?? "true").toLowerCase() !== "false";
 export default defineConfig({
   testDir: "./scripts",
   outputDir: process.env.PW_OUTPUT_DIR || "./reports/test-results",
+  testIgnore: "**/recordings/**",
+  globalSetup: "./global-setup.ts",
 
   workers: 1,
   fullyParallel: false,
@@ -47,20 +49,8 @@ export default defineConfig({
 
   projects: [
     {
-      name: "setup",
-      testMatch: /.*auth\.setup\.ts/,
-      use: {
-        ...devices["Desktop Chrome"],
-        viewport: { width: 1280, height: 800 },
-        launchOptions: {
-          args: ["--no-sandbox", "--disable-dev-shm-usage"],
-        },
-      },
-    },
-    {
       name: "chromium",
       testIgnore: /.*auth\.setup\.ts/,
-      dependencies: ["setup"],
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 800 },

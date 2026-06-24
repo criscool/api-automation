@@ -185,11 +185,15 @@ async def trigger_execution(req: TriggerExecutionRequest):
     execution_id = uuid.uuid4().hex
     session_id = req.session_id or f"ui_exec_{uuid.uuid4().hex[:12]}"
 
-    # 把脚本自带的 base_url 注入 extra_env,让 baseURL / 登录 URL 跟着脚本走 ——
-    # 不同脚本可能跑在不同被测系统(.189/.190/staging),静态 .env 一刀切会翻车。
-    # 优先级:req.extra_env(API 入参显式覆盖) > script.base_url(脚本自带) > .env 兜底
+    # 优先级: req.extra_env > .env settings > script.base_url
     extra_env: Dict[str, str] = dict(req.extra_env or {})
-    if script.base_url:
+    # .env 显式配置优先
+    if settings.UI_BASE_URL:
+        extra_env.setdefault("UI_BASE_URL", settings.UI_BASE_URL)
+    if settings.UI_LOGIN_URL:
+        extra_env.setdefault("UI_LOGIN_URL", settings.UI_LOGIN_URL)
+    # 脚本自带的 base_url 作为兜底
+    if script.base_url and not extra_env.get("UI_BASE_URL"):
         from urllib.parse import urlparse
         try:
             parsed = urlparse(script.base_url.strip())
@@ -200,9 +204,7 @@ async def trigger_execution(req: TriggerExecutionRequest):
             )
         except Exception:
             origin = script.base_url.strip()
-        # UI_BASE_URL 给 playwright.config.ts 的 baseURL 用(脚本里 page.goto("/sub") 拼出全 URL)
         extra_env.setdefault("UI_BASE_URL", origin)
-        # UI_LOGIN_URL 给 auth.setup.ts 用(登录页通常跟业务同源)
         extra_env.setdefault("UI_LOGIN_URL", origin + "/")
 
     # 预创建 pending 行;script_relative_path / timeout / extra_env 全放进

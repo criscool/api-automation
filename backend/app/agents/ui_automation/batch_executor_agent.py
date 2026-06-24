@@ -116,7 +116,13 @@ class UiBatchExecutorAgent(BaseApiAutomationAgent):
 
         sub_session_id = f"ui_exec_{uuid.uuid4().hex[:12]}"
         extra_env = dict(msg.extra_env or {})
-        if script.base_url:
+        # .env 显式配置优先于脚本自带的 base_url
+        from app.settings.config import settings as app_settings
+        if app_settings.UI_BASE_URL:
+            extra_env.setdefault("UI_BASE_URL", app_settings.UI_BASE_URL)
+        if app_settings.UI_LOGIN_URL:
+            extra_env.setdefault("UI_LOGIN_URL", app_settings.UI_LOGIN_URL)
+        if script.base_url and not extra_env.get("UI_BASE_URL"):
             extra_env.setdefault("UI_BASE_URL", script.base_url)
             extra_env.setdefault("UI_LOGIN_URL", script.base_url + "/")
 

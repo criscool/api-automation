@@ -150,6 +150,7 @@ class Settings(BaseSettings):
     # 仅适用于"后端跟前端跑同一台机器"或"远程开发机"的部署模式
     # ============================================================
     UI_RECORDING_ENABLED: bool = True
+    UI_RECORDING_MODE: str = "local"  # "local" | "remote"
     # 录制原始产物落点(相对 UI_AUTOMATION_WORKSPACE):recordings/{session_id}.spec.ts
     UI_RECORDING_RAW_SUBDIR: str = "recordings"
     # 单次录制最长时长（秒）—— 超时强杀子进程,默认 30 分钟

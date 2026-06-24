@@ -116,6 +116,7 @@ backend/generated_ui_tests/test-results/
 backend/generated_ui_tests/playwright-report/
 backend/generated_ui_tests/.playwright/
 backend/generated_ui_tests/midscene_run/
+backend/generated_ui_tests/recordings/
 
 # 旧的自包含脚本（迁移到 testcases/ 后废弃）
 backend/generated_tests/api_test_*/

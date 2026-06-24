@@ -57,6 +57,13 @@ if settings.UI_AUTOMATION_ENABLED:
         recordings_router as ui_automation_recordings_router,
         recordings_stream_router as ui_automation_recordings_stream_router,
     )
+    # 远程录制 WebSocket（独立于录制开关，守护进程长连接）
+    from app.services.ui_automation.remote_recording import router as remote_recording_router
+    v1_router.include_router(
+        remote_recording_router,
+        prefix="/ui-automation",
+        tags=["UI自动化-远程录制"],
+    )
     # health 不挂权限，便于运维探测
     v1_router.include_router(
         ui_automation_health_router,

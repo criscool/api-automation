@@ -99,6 +99,19 @@ async def _kickoff_recording(session_id: str) -> None:
         )
         return
 
+    # 远程录制模式：通知本地守护进程，不走本地 codegen
+    if settings.UI_RECORDING_MODE == "remote":
+        from app.services.ui_automation.remote_recording import notify_daemon
+        success = await notify_daemon(
+            session_id, row.target_url, row.storage_state_path or ""
+        )
+        if not success:
+            await UiRecordingSession.filter(session_id=session_id).update(
+                status="failed",
+                error_message="录制助手未连接。请在本地执行: python record-daemon.py --server <服务器地址>"
+            )
+        return
+
     try:
         await ui_orchestrator.trigger_recording(recording_input)
         logger.info(f"[recording-kickoff {session_id}] 已投递 Topic")
