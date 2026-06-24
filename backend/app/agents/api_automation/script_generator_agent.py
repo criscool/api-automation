@@ -383,10 +383,19 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
 
             body_lit = lit(step.body or {})
             query_lit = lit(step.query or {})
-            # pathParams 由 dataIn 提供运行时值时，剔除示例值（否则示例描述会被预先塞进 URL）
+
+            # 规范化 data_in：统一将 "path.:xxx" 转为 "pathParams.xxx"
+            # 依赖分析工具可能沿用 URL 的 :var 写法，生成器统一纠正
+            raw_data_in = step.data_in or {}
+            normalized_data_in: Dict[str, Dict[str, Any]] = {}
+            for k, v in raw_data_in.items():
+                m = re.match(r"^path\.:(.+)$", k)
+                normalized_data_in[f"pathParams.{m.group(1)}" if m else k] = v
+
+            # pathParams 由 dataIn 提供运行时值时，剔除示例值
             data_in_path_keys: set = {
                 k[len("pathParams."):].lstrip(":").strip("{}")
-                for k in (step.data_in or {}).keys()
+                for k in normalized_data_in.keys()
                 if isinstance(k, str) and k.startswith("pathParams.")
             }
             filtered_path_params = {
@@ -394,7 +403,7 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
                 if str(k).lstrip(":").strip("{}") not in data_in_path_keys
             }
             path_params_lit = lit(filtered_path_params)
-            data_in_lit = lit(step.data_in or {})
+            data_in_lit = lit(normalized_data_in)
 
             # apply_data_in 返回 (body, query, path)
             lines.append("        body, query, path = apply_data_in(")

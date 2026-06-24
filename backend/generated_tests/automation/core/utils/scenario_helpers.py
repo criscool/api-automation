@@ -84,14 +84,31 @@ def _resolve_step_refs_in_path(path: str, ctx: Dict[int, Dict[str, Any]]) -> str
 def resolve_path(obj: Any, path: str) -> Any:
     """按点路径取值，支持 [] / [N] / [k=v]。空路径返回原对象。
     以 'response.' 开头的前缀会被剥掉（response 是 root 别名）。
+    支持 | default N 语法：取值失败时返回默认值。
     """
     if obj is None or not path:
         return obj
     p = _RESPONSE_PREFIX_RE.sub("", path)
     if not p:
         return obj
+
+    # 处理 | default N 管道语法
+    default_val = None
+    has_default = False
+    if " | default " in p:
+        parts = p.split(" | default ", 1)
+        p = parts[0].strip()
+        try:
+            default_val = int(parts[1].strip())
+        except ValueError:
+            default_val = parts[1].strip()
+        has_default = True
+
     tokens = _PATH_TOKEN_RE.findall(p)
-    return _walk(obj, tokens)
+    result = _walk(obj, tokens)
+    if has_default and (result is None or result == [] or result == 0):
+        return default_val
+    return result
 
 
 def _walk(obj: Any, tokens: List[str]) -> Any:
@@ -137,6 +154,10 @@ def _walk(obj: Any, tokens: List[str]) -> Any:
             return None
         return _walk(obj[idx], rest)
     # 字段名
+    if tok == "length" and not rest:
+        if isinstance(obj, list):
+            return len(obj)
+        return None
     if not isinstance(obj, dict):
         return None
     return _walk(obj.get(tok), rest)
@@ -214,6 +235,10 @@ def apply_data_in(
         if key.startswith("pathParams."):
             name = key[len("pathParams."):]
             clean = name.lstrip(":").strip("{}")
+            path = path.replace(f":{clean}", str(value)).replace(f"{{{clean}}}", str(value))
+        elif key.startswith("path.:"):
+            # 兼容依赖 JSON 中 path.:id 写法
+            clean = key[len("path.:"):].lstrip(":").strip("{}")
             path = path.replace(f":{clean}", str(value)).replace(f"{{{clean}}}", str(value))
         elif key.startswith("query."):
             _set_nested(query, key[len("query."):], value)

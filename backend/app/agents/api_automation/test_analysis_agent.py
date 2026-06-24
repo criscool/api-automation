@@ -65,6 +65,11 @@ class TestAnalysisAgent(BaseApiAutomationAgent):
                 logger.warning("evidence 无有效信号，直接走 fallback")
                 return self._fallback_report(evidence, reason="没有可用的失败证据")
 
+            # 硬编码判定：Java 反序列化 Null 错误一定是脚本缺字段
+            error_text = self._collect_error_text(evidence)
+            if "cannot construct instance" in error_text.lower() and "null" in error_text.lower():
+                return self._build_hard_verdict(evidence, error_text)
+
             matched = find_matching_patterns(
                 endpoint_path=self._guess_endpoint(evidence),
                 module_hint=self._guess_module(evidence),
@@ -156,6 +161,18 @@ class TestAnalysisAgent(BaseApiAutomationAgent):
 只输出 JSON，不要在 JSON 外添加任何文字。
 """
 
+    def _build_hard_verdict(self, evidence: FailureEvidence, error_text: str) -> Dict[str, Any]:
+        """硬编码判定：Java 反序列化 Null → 一定是 SCRIPT_FIX，不调 LLM"""
+        return {
+            "verdict": "SCRIPT_FIX",
+            "confidence": 0.95,
+            "summary": f"Java 反序列化报 Null 字段缺失，payload 缺少必填参数: {error_text[:200]}",
+            "report_md": f"## 诊断报告\n\n### 失败现象\nJava 后端反序列化请求体时发现必填字段为 null。\n\n### 根本原因\n测试脚本的 payload 缺少一个或多个必填字段。\n\n### 错误信息\n```\n{error_text[:500]}\n```\n\n### 修复方向\n补全 payload 中所有必填字段。",
+            "evidence": [{"source": "response_body", "quote": error_text[:300]}],
+            "matched_patterns": ["strategy_add_required_fields"],
+            "from_fallback": True,
+        }
+
     def _fallback_report(self, evidence: FailureEvidence, reason: str) -> Dict[str, Any]:
         """LLM 不可用时的兜底报告：把已有证据原样呈现，让人来判"""
         tc = evidence.get("test_case") or {}
@@ -206,8 +223,9 @@ class TestAnalysisAgent(BaseApiAutomationAgent):
         return ""
 
     def _collect_error_text(self, evidence: FailureEvidence) -> str:
-        return "\n".join([
-            evidence.get("error_message", ""),
+        return "\n".join(filter(None, [
+            evidence.get("stdout_tail", ""),
             evidence.get("stderr_tail", ""),
+            evidence.get("error_message", ""),
             evidence.get("failure_snippet", ""),
-        ])
+        ]))
