@@ -120,7 +120,7 @@ class TestAnalysisAgent(BaseApiAutomationAgent):
         return f"""你是一位资深 API 测试架构师，负责诊断 pytest 自动化测试用例的失败原因。
 
 ## 你的判定原则
-1. **SCRIPT_FIX**: 失败原因可通过修改测试脚本解决（如 payload 字段名错误、断言写法不兼容、缺必填项）
+1. **SCRIPT_FIX**: 失败原因可通过修改测试脚本解决（如 payload 字段名错误、断言写法不兼容、缺必填项、**Java 反序列化 `Null <xxx>` 错误**）
 2. **PRODUCT_BUG**: 失败原因是后端逻辑/数据问题（如 500 错误、数据库异常、业务规则违反）
 3. **UNCERTAIN**: 证据不足以判定
 
