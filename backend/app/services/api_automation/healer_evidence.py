@@ -88,6 +88,26 @@ async def collect_evidence(
                 "nodeid": _build_nodeid(tc),
             }
 
+    # 未指定 test_case_id 时，通过 script_file_path + 失败状态自动发现最近失败的用例
+    if not evidence.get("test_case") and script.file_path:
+        tc = await TestCase.filter(
+            script_file_path=script.file_path,
+            last_execution_status__in=["FAILED", "ERROR"]
+        ).order_by("-last_execution_time").first()
+        if tc:
+            evidence["test_case"] = {
+                "test_id": tc.test_id,
+                "name": tc.name,
+                "class_name": tc.class_name,
+                "method_name": tc.method_name,
+                "nodeid": _build_nodeid(tc),
+            }
+            logger.info(
+                f"collect_evidence: 自动发现失败用例 test_id={tc.test_id} "
+                f"class={tc.class_name} method={tc.method_name} "
+                f"（script_file_path={script.file_path}）"
+            )
+
     last_exec = None
     try:
         last_exec = (

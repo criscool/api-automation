@@ -65,6 +65,11 @@ class ManualScriptRegisterRequest(BaseModel):
     api_method: str = Field(default="POST", description="被测接口方法（GET/POST/PUT/DELETE）")
 
 
+class ScriptContentUpdateRequest(BaseModel):
+    """脚本代码内容更新请求"""
+    content: str = Field(..., min_length=1, description="新的脚本源代码（不能为空）")
+
+
 # ==================== 手动脚本注册API ====================
 
 
@@ -367,6 +372,38 @@ async def update_script_status(script_id: str, request: ScriptStatusUpdateReques
     except Exception as e:
         logger.error(f"更新脚本状态失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"更新脚本状态失败: {str(e)}")
+
+
+@router.put("/{script_id}/content", summary="更新脚本代码内容")
+async def update_script_content(script_id: str, request: ScriptContentUpdateRequest):
+    """修改测试脚本的源代码，同时更新数据库和磁盘文件"""
+    try:
+        script_service = InterfaceScriptService()
+        result = await script_service.update_script_content(
+            script_id=script_id,
+            content=request.content,
+        )
+
+        return {
+            "code": 200,
+            "msg": "脚本内容已更新",
+            "data": result,
+            "success": True,
+        }
+
+    except SyntaxError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"脚本语法错误: {e.msg} (第 {e.lineno} 行)",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        logger.error(f"更新脚本内容失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"更新脚本内容失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"更新脚本内容失败: {str(e)}")
 
 
 @router.delete("/{script_id}", summary="删除脚本")

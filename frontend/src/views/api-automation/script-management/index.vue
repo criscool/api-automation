@@ -178,23 +178,50 @@
           
           <n-tab-pane name="code" tab="脚本代码">
             <div class="code-editor-container">
+              <!-- 顶部工具栏 -->
               <div class="flex justify-between items-center mb-4">
                 <n-space>
                   <n-tag>{{ scriptForm.framework }}</n-tag>
                   <n-tag type="info">{{ scriptForm.language || 'Python' }}</n-tag>
                 </n-space>
-                <n-text depth="3" class="text-xs">
-                  {{ (scriptForm.scriptContent || '').split('\n').length }} 行
-                </n-text>
+                <n-space>
+                  <n-text depth="3" class="text-xs">
+                    {{ (isCodeEditing ? editingCode : scriptForm.scriptContent || '').split('\n').length }} 行
+                  </n-text>
+                  <!-- 查看模式 -->
+                  <template v-if="!isCodeEditing">
+                    <n-button size="small" @click="startEditCode" type="primary" ghost>
+                      <template #icon><n-icon><Icon icon="mdi:pencil" /></n-icon></template>
+                      编辑
+                    </n-button>
+                  </template>
+                  <!-- 编辑模式 -->
+                  <template v-else>
+                    <n-button size="small" @click="saveCode" type="primary" :loading="savingCode">
+                      <template #icon><n-icon><Icon icon="mdi:content-save" /></n-icon></template>
+                      保存代码
+                    </n-button>
+                    <n-button size="small" @click="cancelEditCode" :disabled="savingCode">取消</n-button>
+                  </template>
+                </n-space>
               </div>
+              <!-- 显示模式 -->
               <n-code
-                v-if="scriptForm.scriptContent"
+                v-if="!isCodeEditing && scriptForm.scriptContent"
                 :code="scriptForm.scriptContent"
                 language="python"
                 show-line-numbers
                 style="max-height: 500px; overflow: auto;"
               />
-              <n-empty v-else description="暂无脚本代码" />
+              <n-empty v-else-if="!isCodeEditing && !scriptForm.scriptContent" description="暂无脚本代码" />
+              <!-- 编辑模式 -->
+              <SimpleCodeEditor
+                v-if="isCodeEditing"
+                v-model="editingCode"
+                language="python"
+                :height="500"
+                :show-header="false"
+              />
             </div>
           </n-tab-pane>
           
@@ -274,7 +301,7 @@
 
           <n-space>
             <n-button @click="saveScript" type="primary" :loading="saving">保存</n-button>
-            <n-button @click="showScriptModal = false">关闭</n-button>
+            <n-button @click="closeScriptModal">关闭</n-button>
           </n-space>
         </div>
       </template>
@@ -348,7 +375,7 @@
 <script setup>
 import { ref, computed, onMounted, h, shallowRef } from 'vue'
 import { useRouter } from 'vue-router'
-import { NButton, NTag, NPopover, NCode, NEmpty, NText, useMessage } from 'naive-ui'
+import { NButton, NTag, NPopover, NCode, NEmpty, NText, NIcon, useMessage } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import api from '@/api'
 import { formatTime } from '@/utils'
@@ -419,6 +446,9 @@ const executing = ref(false)
 const executingId = ref(null)
 const debugging = ref(false)
 const saving = ref(false)
+const savingCode = ref(false)
+const isCodeEditing = ref(false)
+const editingCode = ref('')
 const creating = ref(false)
 const executionResult = ref(null)
 const executionHistory = ref([])
@@ -958,6 +988,8 @@ const editScript = async (testCase) => {
   }
 
   executionHistory.value = []
+  isCodeEditing.value = false
+  editingCode.value = ''
   showScriptModal.value = true
 }
 
@@ -1104,6 +1136,10 @@ const saveScript = async () => {
     if (testId && scriptForm.value.scriptName) {
       await api.updateTestCase(testId, { name: scriptForm.value.scriptName })
     }
+    // 如果在代码编辑模式，一并保存代码
+    if (isCodeEditing.value) {
+      await doSaveCode()
+    }
     message.success('保存成功')
     showScriptModal.value = false
     loadTestScripts()
@@ -1114,6 +1150,52 @@ const saveScript = async () => {
   } finally {
     saving.value = false
   }
+}
+
+// ==================== 代码编辑 ====================
+
+const startEditCode = () => {
+  editingCode.value = scriptForm.value.scriptContent || ''
+  isCodeEditing.value = true
+}
+
+const cancelEditCode = () => {
+  isCodeEditing.value = false
+  editingCode.value = ''
+}
+
+const doSaveCode = async () => {
+  const scriptId = selectedScript.value?.script_id
+  if (!scriptId) throw new Error('缺少脚本 ID')
+  const resp = await api.updateScriptCode(scriptId, { content: editingCode.value })
+  if (resp?.data) {
+    scriptForm.value.scriptContent = editingCode.value
+    isCodeEditing.value = false
+  } else {
+    throw new Error(resp?.msg || '保存失败')
+  }
+}
+
+const saveCode = async () => {
+  savingCode.value = true
+  try {
+    await doSaveCode()
+    message.success('代码已保存')
+  } catch (error) {
+    const detail = error?.response?.data?.detail || error?.message || '未知错误'
+    message.error('保存代码失败: ' + detail)
+  } finally {
+    savingCode.value = false
+  }
+}
+
+const closeScriptModal = () => {
+  if (isCodeEditing.value && editingCode.value !== (scriptForm.value.scriptContent || '')) {
+    if (!window.confirm('代码尚未保存，确定关闭吗？')) return
+  }
+  isCodeEditing.value = false
+  editingCode.value = ''
+  showScriptModal.value = false
 }
 
 const createTestScript = async () => {

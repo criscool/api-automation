@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from loguru import logger
 import uuid
+import ast
 import asyncio
 import json
 from pathlib import Path
@@ -248,7 +249,70 @@ class InterfaceScriptService:
         except Exception as e:
             logger.error(f"获取脚本详情失败: {e}")
             raise
-    
+
+    async def update_script_content(self, script_id: str, content: str) -> Dict[str, Any]:
+        """更新脚本代码内容（备份→校验→写DB→写磁盘→重置治愈熔断）
+
+        Args:
+            script_id: 脚本唯一ID
+            content: 新的脚本源代码（不能为空）
+
+        Returns:
+            {script_id, name, file_path, updated_at}
+
+        Raises:
+            ValueError: 脚本不存在或内容为空
+            SyntaxError: 新内容存在Python语法错误
+            RuntimeError: 磁盘写入失败
+        """
+        if not content or not content.strip():
+            raise ValueError("脚本内容不能为空")
+
+        try:
+            # 1. 查找并校验脚本
+            script = await TestScript.filter(script_id=script_id).first()
+            if not script:
+                raise ValueError(f"脚本不存在: {script_id}")
+
+            # 2. 备份旧内容
+            script.content_backup = script.content or ""
+
+            # 3. AST 语法校验
+            ast.parse(content)
+
+            # 4. 写入 DB
+            script.content = content
+            # 人工编辑后重置治愈熔断，允许 AI 后续再介入
+            script.heal_failed_count = 0
+            script.last_heal_status = "MANUAL_EDITED"
+            await script.save()
+
+            # 5. 落盘（参考 healer_service 做法）
+            backend_dir = Path(__file__).resolve().parents[3]
+            generated_tests_dir = backend_dir / "generated_tests"
+            script_file = generated_tests_dir / (script.file_path or script.file_name)
+            try:
+                script_file.parent.mkdir(parents=True, exist_ok=True)
+                script_file.write_text(content, encoding="utf-8")
+            except Exception as e:
+                logger.error(f"写入脚本文件失败 {script_file}: {e}")
+                raise RuntimeError(f"写入脚本文件失败: {e}")
+
+            logger.info(f"脚本内容已更新 script_id={script_id} file={script_file}")
+
+            return {
+                "script_id": script.script_id,
+                "name": script.name,
+                "file_path": script.file_path,
+                "updated_at": script.updated_at,
+            }
+
+        except (ValueError, SyntaxError, RuntimeError):
+            raise
+        except Exception as e:
+            logger.error(f"更新脚本内容失败 script_id={script_id}: {e}")
+            raise RuntimeError(f"更新脚本内容失败: {e}")
+
     async def update_script_status(
         self, 
         script_id: str, 

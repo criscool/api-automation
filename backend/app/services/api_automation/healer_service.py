@@ -172,11 +172,30 @@ class HealerService:
         # 2. 分析
         await self._push(session, "diag.analyzing", {})
         stage_started = time.time()
-        analysis_agent = await agent_factory.create_agent(
-            AgentTypes.TEST_ANALYSIS.value,
-            platform=AgentPlatform.API_AUTOMATION,
-        )
-        analysis_result = await analysis_agent.analyze(evidence, stream=False)
+
+        # 硬编码预处理：Java 反序列化 Null → 直接判 SCRIPT_FIX，跳过 LLM
+        error_text = "\n".join(filter(None, [
+            evidence.get("stdout_tail", ""),
+            evidence.get("stderr_tail", ""),
+            evidence.get("error_message", ""),
+            evidence.get("failure_snippet", ""),
+        ]))
+        if "cannot construct instance" in error_text.lower() and "null" in error_text.lower():
+            analysis_result = {
+                "verdict": "SCRIPT_FIX",
+                "confidence": 0.95,
+                "summary": f"Java 反序列化报 Null 字段缺失: {error_text[:200]}",
+                "report_md": f"## 诊断报告\n\n### 失败现象\nJava 后端反序列化请求体时发现必填字段为 null。\n\n### 根本原因\n测试脚本的 payload 缺少一个或多个必填字段。\n\n### 错误信息\n```\n{error_text[:500]}\n```\n\n### 修复方向\n补全 payload 中所有必填字段。",
+                "evidence": [{"source": "response_body", "quote": error_text[:300]}],
+                "matched_patterns": ["strategy_add_required_fields"],
+                "from_fallback": True,
+            }
+        else:
+            analysis_agent = await agent_factory.create_agent(
+                AgentTypes.TEST_ANALYSIS.value,
+                platform=AgentPlatform.API_AUTOMATION,
+            )
+            analysis_result = await analysis_agent.analyze(evidence, stream=False)
         analyze_elapsed = time.time() - stage_started
         logger.info(f"诊断阶段[analyze] session={session.session_id} 耗时 {analyze_elapsed:.1f}s verdict={analysis_result.get('verdict')}")
         await self._push(

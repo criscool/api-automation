@@ -81,6 +81,7 @@ export default {
   getScriptGenerationHistory: (interfaceId, limit = 10) => request.get(`/scripts/interfaces/${interfaceId}/scripts/generation-history`, { params: { limit } }),
   getDocumentScriptOverview: (documentId) => request.get(`/scripts/documents/${documentId}/scripts/overview`),
   getScriptDetail: (scriptId) => request.get(`/scripts/${scriptId}`),
+  updateScriptCode: (scriptId, data = {}) => request.put(`/scripts/${scriptId}/content`, data),
   updateScriptStatus: (scriptId, data) => request.put(`/scripts/${scriptId}/status`, data),
   deleteScript: (scriptId, softDelete = true) => request.delete(`/scripts/${scriptId}`, { params: { soft_delete: softDelete } }),
   batchUpdateScriptStatus: (data) => request.put('/scripts/batch-status', data),
