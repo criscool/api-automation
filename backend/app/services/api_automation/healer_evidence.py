@@ -112,10 +112,18 @@ async def collect_evidence(
     try:
         last_exec = (
             await ScriptExecutionResult
-            .filter(script=script, status="FAILED")
+            .filter(script=script, status__in=["FAILED", "ERROR"])
             .order_by("-created_at")
             .first()
         )
+        # 回退：查有失败用例数但状态标记非 FAILED/ERROR 的执行记录
+        if not last_exec:
+            last_exec = (
+                await ScriptExecutionResult
+                .filter(script=script, failed_tests__gt=0)
+                .order_by("-created_at")
+                .first()
+            )
     except Exception as e:
         logger.warning(f"加载 ScriptExecutionResult 失败 script_id={script_id}: {e}")
 
@@ -149,11 +157,13 @@ async def collect_evidence(
                 execution_id, method_name
             )
 
-    if not evidence.get("error_message") and test_case_id:
+    # 回退：从 TestResult 表拿错误信息（优先用传入的 test_case_id，其次用自动发现的）
+    effective_test_id = test_case_id or (evidence.get("test_case") or {}).get("test_id")
+    if not evidence.get("error_message") and effective_test_id:
         try:
             tr = (
                 await TestResult
-                .filter(test_case__test_id=test_case_id, status="failed")
+                .filter(test_case__test_id=effective_test_id, status="failed")
                 .order_by("-start_time")
                 .first()
             )
