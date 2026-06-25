@@ -175,10 +175,24 @@ class ApiDataPersistenceAgent(BaseApiAutomationAgent):
                         logger.info(f"跳过 conftest.py 持久化: {script.script_name}")
                         continue
 
-                    # 检查是否已存在相同的脚本
+                    # 检查是否已存在相同的脚本：
+                    # 1) 精确命中 script_id（生成后更新场景）
+                    # 2) 同接口下重名（防止重复生成产生多条记录）
                     existing_script = await TestScript.filter(
                         script_id=script.script_id
                     ).using_db(conn).first()
+
+                    if not existing_script:
+                        existing_script = await TestScript.filter(
+                            name=script.script_name,
+                            interface=interface,
+                            is_active=True,
+                        ).using_db(conn).order_by("-created_at").first()
+                        if existing_script:
+                            logger.warning(
+                                f"发现同名脚本 {script.script_name}，"
+                                f"将更新已有记录（ID={existing_script.script_id}）而非新建"
+                            )
 
                     if existing_script:
                         # 更新现有脚本
@@ -473,6 +487,11 @@ class ApiDataPersistenceAgent(BaseApiAutomationAgent):
     @staticmethod
     def _derive_case_display_name(test_case: GeneratedTestCase, endpoint: ParsedEndpoint) -> str:
         """计算用例展示名：优先用 endpoint.description，按 test_type 加后缀区分。"""
+        # 用户在导入入口显式指定的用例名优先级最高（依赖 JSON 快速导入通道）
+        override = getattr(test_case, "display_name_override", None)
+        if override and override.strip():
+            return override.strip()
+
         base = ""
         if endpoint:
             base = (endpoint.description or "").strip() or (endpoint.summary or "").strip()

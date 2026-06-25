@@ -104,7 +104,7 @@ class DependencyDocConverter:
         """所有去重后的端点列表（同 path 不同 bodyShape 视为不同端点）。"""
         return list(self._endpoint_cache.values())
 
-    def to_test_cases(self) -> List[GeneratedTestCase]:
+    def to_test_cases(self, display_name: Optional[str] = None) -> List[GeneratedTestCase]:
         """每个 chain → 一个 GeneratedTestCase（整条链折叠成 1 条用例）。
 
         关联到 chain 的 primary_endpoint，tags 含 `scenario:<chain.name>`。
@@ -114,6 +114,11 @@ class DependencyDocConverter:
         结果被缓存：GeneratedTestCase.test_case_id 用 uuid4 默认值，
         多次调用必须返回同一批对象，否则 ScenarioStepSpec.related_test_case_id
         会引用到不存在的 UUID。
+
+        Args:
+            display_name: 用户在导入入口填写的中文用例名。非空时落到
+                GeneratedTestCase.display_name_override，覆盖
+                ApiDataPersistenceAgent._derive_case_display_name 的兜底逻辑。
         """
         if self._test_cases_cache is not None:
             return self._test_cases_cache
@@ -142,6 +147,10 @@ class DependencyDocConverter:
 
             test_name = f"test_scenario_{self._slugify(chain_name)}"
             description = chain_desc or chain_name or test_name
+            # tag 用最终的展示名（display_name 优先），与 ScenarioTestCase.name 保持一致；
+            # 这样 ApiDataPersistenceAgent._build_script_flow_summary 里的
+            # scenarios_by_name 反查（按 sc.name 索引）才能命中
+            scenario_tag_name = (display_name or chain_name).strip()
             cases.append(
                 GeneratedTestCase(
                     test_name=test_name,
@@ -151,7 +160,12 @@ class DependencyDocConverter:
                     test_data=[],
                     assertions=[],
                     priority=1,
-                    tags=[f"scenario:{chain_name}", "scenario"] if chain_name else ["scenario"],
+                    tags=(
+                        [f"scenario:{scenario_tag_name}", "scenario"]
+                        if scenario_tag_name
+                        else ["scenario"]
+                    ),
+                    display_name_override=(display_name or None),
                 )
             )
         self._test_cases_cache = cases
@@ -220,11 +234,22 @@ class DependencyDocConverter:
                         )
         return deps
 
-    def to_scenarios(self) -> List[ScenarioTestCase]:
+    def to_scenarios(
+        self,
+        display_name: Optional[str] = None,
+        en_slug: Optional[str] = None,
+    ) -> List[ScenarioTestCase]:
         """所有 chain → ScenarioTestCase 列表（每个 chain 对应一个测试方法）。
 
         结果被缓存：ScenarioTestCase.scenario_id 用 uuid4 默认值，
         多次调用必须返回同一批对象。
+
+        Args:
+            display_name: 用户在导入入口填写的中文用例名。非空时覆盖 chain.name
+                (影响 class docstring / test method docstring / TestCase.name)。
+            en_slug: 用户输入名经 LLM 翻译得到的英文 snake_case slug。
+                非空时由 ScriptGeneratorAgent 优先用作文件名 slug；
+                空时 fallback 到 _sanitize_name 静态字典。
         """
         if self._scenarios_cache is not None:
             return self._scenarios_cache
@@ -268,7 +293,7 @@ class DependencyDocConverter:
                     assert_spec=raw_step.get("assert"),
                     depends_on=[int(x) for x in (raw_step.get("dependsOn") or [])],
                     related_endpoint_id=ep.endpoint_id,
-                    related_test_case_id=case_index.get(chain_name),
+                    related_test_case_id=case_index.get((display_name or chain_name).strip()),
                 )
                 steps.append(step_spec)
 
@@ -287,11 +312,12 @@ class DependencyDocConverter:
 
             scenarios.append(
                 ScenarioTestCase(
-                    name=chain_name,
+                    name=(display_name or chain_name),
                     description=str(chain.get("description") or ""),
                     steps=steps,
                     tags=[self._slugify(self.module), "scenario"],
                     primary_endpoint_id=primary_ep_id,
+                    en_slug=en_slug,
                 )
             )
         self._scenarios_cache = scenarios

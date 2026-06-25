@@ -109,6 +109,14 @@
             将直接通过模板渲染生成场景测试脚本，不经过 ApiAnalyzer / TestCaseGenerator。
           </n-alert>
           <div class="dependency-import-upload">
+            <n-input
+              v-model:value="depImportDisplayName"
+              placeholder="用例名称（中文，必填）"
+              clearable
+              maxlength="64"
+              show-count
+              style="margin-bottom: 12px"
+            />
             <n-upload
               ref="depImportUploadRef"
               :max="1"
@@ -125,7 +133,7 @@
               <n-button
                 type="primary"
                 :loading="depImporting"
-                :disabled="!depImportFile"
+                :disabled="!depImportFile || !depImportDisplayName?.trim()"
                 @click="importDependencyDoc"
               >
                 导入并生成场景脚本
@@ -263,7 +271,7 @@
                   type="primary"
                   secondary
                   :loading="depImporting"
-                  :disabled="!depImportFile"
+                  :disabled="!depImportFile || !depImportDisplayName?.trim()"
                   @click="importDependencyDoc"
                 >
                   导入并生成场景脚本
@@ -595,6 +603,7 @@ const directGenError = ref(null)
 // 依赖 JSON 导入
 const depImportUploadRef = ref()
 const depImportFile = ref(null)
+const depImportDisplayName = ref('')
 const depImporting = ref(false)
 const depImportTaskId = ref(null)
 const depImportDocId = ref(null)
@@ -611,12 +620,23 @@ const handleDepImportFileChange = ({ fileList: newFileList }) => {
 
 const importDependencyDoc = async () => {
   if (!depImportFile.value) return
+  const displayName = (depImportDisplayName.value || '').trim()
+  if (!displayName) {
+    depImportAlert.value = {
+      type: 'warning',
+      title: '请填写用例名称',
+      msg: '用例名称（中文）必填，将作为脚本管理列表显示的用例名',
+      data: null,
+    }
+    return
+  }
   depImporting.value = true
   depImportAlert.value = null
 
   try {
     const formData = new FormData()
     formData.append('file', depImportFile.value)
+    formData.append('display_name', displayName)
 
     const resp = await api.importDependencyDoc(formData)
 

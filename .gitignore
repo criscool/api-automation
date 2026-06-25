@@ -123,6 +123,10 @@ backend/generated_tests/api_test_*/
 
 # AI 生成的测试文件（不入库），但保留 conftest 等基础文件
 backend/generated_tests/testcases/test_*
+backend/generated_tests/testcases/_cleanup_demo.py
+backend/fix_doc.py
+backend/sync_demo.py
+docs/dependency-import-rename-design.md
 
 # AI 生成的 API 封装模块（不入库，运行时生成）
 backend/generated_tests/automation/api/modules/*_api.py

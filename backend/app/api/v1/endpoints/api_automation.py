@@ -1503,11 +1503,25 @@ async def _persist_dependency_import_records(
 
 
 @router.post("/dependency-import", summary="导入依赖 JSON 触发 scenario 脚本生成")
-async def import_dependency_doc(file: UploadFile = File(...)):
+async def import_dependency_doc(
+    file: UploadFile = File(...),
+    display_name: str = Form(..., description="用户输入的中文用例名称（脚本管理列表展示的「用例名称」）"),
+):
     """接收预分析的依赖 JSON（ai-testmind 等工具产出），跳过 ApiAnalyzer/
     TestCaseGenerator 两个智能体，直接走 ScriptGeneratorAgent 的 scenario 分支
     模板渲染出可执行 pytest 脚本。
+
+    display_name 是用户在导入入口手动填写的中文用例名，用作脚本管理列表
+    展示的「用例名称」（TestCase.name）和脚本里的 class docstring；
+    同时会被 LLM 翻译为英文 snake_case slug，拼上时间戳作为 .py 文件名。
+    多 chain 的 JSON 暂只支持 1 条；超过 1 条直接 400 拒绝。
     """
+    display_name = (display_name or "").strip()
+    if not display_name:
+        raise HTTPException(status_code=400, detail="用例名称不能为空")
+    if len(display_name) > 64:
+        raise HTTPException(status_code=400, detail="用例名称不能超过 64 字符")
+
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="未选择文件")
     if not file.filename.lower().endswith(".json"):
@@ -1527,7 +1541,18 @@ async def import_dependency_doc(file: UploadFile = File(...)):
             detail="不是有效的依赖 JSON（缺少 chains 字段）",
         )
 
+    chains_count = len(doc.get("chains") or [])
+    if chains_count > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=f"暂只支持单 chain 导入，当前 JSON 含 {chains_count} 条 chain，请拆分后再导入",
+        )
+
     from app.services.api_automation.dependency_doc_converter import DependencyDocConverter
+    from app.services.api_automation.cn_to_slug import translate_to_slug
+
+    # LLM 翻译中文 → 英文 snake_case slug，失败返回 None 由 ScriptGeneratorAgent fallback
+    en_slug = await translate_to_slug(display_name)
 
     try:
         converter = DependencyDocConverter(doc)
@@ -1536,8 +1561,8 @@ async def import_dependency_doc(file: UploadFile = File(...)):
 
     api_info = converter.to_api_info()
     endpoints = converter.to_endpoints()
-    test_cases = converter.to_test_cases()
-    scenarios = converter.to_scenarios()
+    test_cases = converter.to_test_cases(display_name=display_name)
+    scenarios = converter.to_scenarios(display_name=display_name, en_slug=en_slug)
     dependencies = converter.to_dependencies()
 
     if not scenarios:

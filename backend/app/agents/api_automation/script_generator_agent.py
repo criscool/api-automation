@@ -89,8 +89,8 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
         start_time = datetime.now()
         self.generation_metrics["total_generations"] += 1
 
-        # 隔离模式：每次上传生成唯一后缀，避免覆盖已存在的同名脚本
-        isolated = (message.generation_options or {}).get("isolated_mode", False)
+        # 隔离模式：默认启用，每次生成唯一后缀，避免覆盖已存在的同名脚本
+        isolated = (message.generation_options or {}).get("isolated_mode", True)
         self._run_suffix = uuid.uuid4().hex[:8] if isolated else ""
 
         try:
@@ -332,7 +332,12 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
         import pprint
 
         slug = self._sanitize_name(sc.name)
-        script_name = self._suffix_name(f"test_scenario_{slug}.py")
+        # 文件名 slug 优先用 LLM 翻译的英文 slug（由依赖 JSON 快速导入入口传入），
+        # 没有则 fallback 到中文→拼音/静态字典的 _sanitize_name
+        file_slug = sc.en_slug if sc.en_slug else slug
+        # 时间戳避免重复导入产生命名冲突；同时让多次导入的脚本在磁盘上独立共存
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        script_name = self._suffix_name(f"test_scenario_{file_slug}_{timestamp}.py")
         class_name = "TestScenario" + "".join(w.capitalize() for w in slug.split("_") if w)
         if not class_name or class_name == "TestScenario":
             class_name = "TestScenarioChain"

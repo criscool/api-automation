@@ -303,6 +303,7 @@ class GeneratedTestCase(BaseModel):
     cleanup_steps: List[str] = Field(default_factory=list, description="清理步骤")
     priority: int = Field(1, description="优先级")
     tags: List[str] = Field(default_factory=list, description="标签")
+    display_name_override: Optional[str] = Field(None, description="用户指定的中文用例名，落库时优先于自动派生名")
 
 
 class TestCaseGenerationOutput(BaseModel):
@@ -1047,6 +1048,7 @@ class ScenarioTestCase(BaseModel):
     steps: List[ScenarioStepSpec] = Field(default_factory=list, description="顺序步骤列表")
     tags: List[str] = Field(default_factory=list, description="标签（用于 pytest mark）")
     primary_endpoint_id: Optional[str] = Field(None, description="主端点ID（用于 TestCase 入库时挂载）")
+    en_slug: Optional[str] = Field(None, description="英文 snake_case slug，用于脚本文件名（来自用户输入的 LLM 翻译）")
 
 
 # 解析 ScriptGenerationInput / ScriptPersistenceInput 上的前向引用 "ScenarioTestCase"

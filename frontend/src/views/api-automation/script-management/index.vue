@@ -24,6 +24,19 @@
             style="width: 180px"
             @update:value="loadTestScripts"
           />
+
+          <n-select
+            v-model:value="filterScriptId"
+            :options="scriptOptions"
+            placeholder="所在脚本筛选"
+            clearable
+            filterable
+            remote
+            :loading="scriptOptionsLoading"
+            style="width: 240px"
+            @search="onScriptSearch"
+            @update:value="loadTestScripts"
+          />
         </div>
 
         <n-space>
@@ -406,6 +419,12 @@ const loading = ref(false)
 const selectedScripts = ref([])
 const searchKeyword = ref('')
 const filterStatus = ref('')
+
+// 所在脚本筛选（远程搜索 + 分页 50）
+const filterScriptId = ref(null)
+const scriptOptions = ref([])
+const scriptOptionsLoading = ref(false)
+let scriptSearchTimer = null
 
 // AI 诊断抽屉
 const healingShow = ref(false)
@@ -843,6 +862,31 @@ const historyColumns = [
 ]
 
 // 方法
+const loadScriptOptions = async (query = '') => {
+  scriptOptionsLoading.value = true
+  try {
+    const res = await api.getAllScripts({
+      page: 1,
+      page_size: 50,
+      search: query || undefined,
+    })
+    const list = res?.data?.scripts || res?.data?.items || (Array.isArray(res?.data) ? res.data : [])
+    scriptOptions.value = list.map((s) => ({
+      label: s.file_name || s.name || s.script_id,
+      value: s.script_id,
+    }))
+  } catch (e) {
+    // 静默失败，下拉为空就为空
+  } finally {
+    scriptOptionsLoading.value = false
+  }
+}
+
+const onScriptSearch = (query) => {
+  clearTimeout(scriptSearchTimer)
+  scriptSearchTimer = setTimeout(() => loadScriptOptions(query), 300)
+}
+
 const loadTestScripts = async () => {
   loading.value = true
   try {
@@ -851,6 +895,7 @@ const loadTestScripts = async () => {
       page_size: pagination.value.pageSize,
       search: searchKeyword.value || undefined,
       test_type: filterStatus.value || undefined,
+      script_id: filterScriptId.value || undefined,
       include_inactive: false
     }
 
@@ -1454,6 +1499,7 @@ const getMethodType = (method) => {
 onMounted(async () => {
   loadTestScripts()
   loadEndpoints()
+  loadScriptOptions()
 })
 </script>
 

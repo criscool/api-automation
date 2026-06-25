@@ -211,6 +211,7 @@ async def get_all_test_cases(
     test_type: Optional[str] = Query(None, description="测试类型筛选"),
     document_id: Optional[str] = Query(None, description="文档ID筛选"),
     interface_id: Optional[str] = Query(None, description="接口ID筛选"),
+    script_id: Optional[str] = Query(None, description="脚本ID筛选（按所属脚本聚焦用例）"),
     include_inactive: bool = Query(False, description="是否包含已删除"),
     category_id: Optional[str] = Query(None, description="用例分类ID筛选（含子分类）"),
     uncategorized: bool = Query(False, description="只返回未分类用例"),
@@ -229,6 +230,15 @@ async def get_all_test_cases(
             qs = qs.filter(document__doc_id=document_id)
         if interface_id:
             qs = qs.filter(endpoint__interface_id=interface_id)
+        if script_id:
+            script = await TestScript.filter(
+                script_id=script_id, is_active=True
+            ).only("file_path").first()
+            if script and script.file_path:
+                qs = qs.filter(script_file_path=script.file_path)
+            else:
+                # 脚本不存在 / 已删除 / 无 file_path：直接返回空，避免误把全表当作匹配
+                qs = qs.filter(script_file_path="__no_match__")
         if uncategorized:
             qs = qs.filter(category_id__isnull=True)
         elif category_id:
