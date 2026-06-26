@@ -554,6 +554,8 @@ const scriptColumns = [
     title: '所在脚本',
     key: 'script_file_name',
     width: 200,
+    minWidth: 120,
+    resizable: true,
     ellipsis: { tooltip: true },
     render: (row) => row.script_file_name
       ? h('span', { style: 'font-family: ui-monospace, SFMono-Regular, monospace;' }, row.script_file_name)
