@@ -117,24 +117,42 @@
               show-count
               style="margin-bottom: 12px"
             />
-            <n-upload
-              ref="depImportUploadRef"
-              :max="1"
-              accept=".json"
-              :default-upload="false"
-              @change="handleDepImportFileChange"
+            <!-- 已上传文件可复用：识别为依赖 JSON 时直接展示，不再要求重新选 -->
+            <n-alert
+              v-if="uploadedFile?.docId"
+              type="success"
+              :bordered="false"
+              class="mb-3"
             >
-              <n-button>选择依赖 JSON</n-button>
-            </n-upload>
-            <div v-if="depImportFile" class="mt-2">
-              <n-tag type="info">{{ depImportFile.name }}</n-tag>
-            </div>
+              已识别为依赖 JSON，将使用 Step 1 上传的文件：
+              <strong>{{ uploadedFile.name }}</strong>
+            </n-alert>
+
+            <!-- 兜底：docId 不可用时退化为传统手选 -->
+            <template v-else>
+              <n-upload
+                ref="depImportUploadRef"
+                :max="1"
+                accept=".json"
+                :default-upload="false"
+                @change="handleDepImportFileChange"
+              >
+                <n-button>选择依赖 JSON</n-button>
+              </n-upload>
+              <div v-if="depImportFile" class="mt-2">
+                <n-tag type="info">{{ depImportFile.name }}</n-tag>
+              </div>
+            </template>
             <div class="mt-4 flex items-center gap-3">
               <n-button
                 type="primary"
                 :loading="depImporting"
-                :disabled="!depImportFile || !depImportDisplayName?.trim()"
-                @click="importDependencyDoc"
+                :disabled="
+                  uploadedFile?.docId
+                    ? !depImportDisplayName?.trim()
+                    : !depImportFile || !depImportDisplayName?.trim()
+                "
+                @click="handleDepImportSubmit"
               >
                 导入并生成场景脚本
               </n-button>
@@ -630,14 +648,54 @@ const importDependencyDoc = async () => {
     }
     return
   }
+  const formData = new FormData()
+  formData.append('file', depImportFile.value)
+  formData.append('display_name', displayName)
+  await _runDepImport(formData)
+}
+
+// Step 3「0 接口」分支：复用 Step 1 已上传文件，不再要求重新选
+const importDependencyDocFromUploaded = async () => {
+  if (!uploadedFile.value?.docId) {
+    depImportAlert.value = {
+      type: 'error',
+      title: '缺少文档 ID',
+      msg: '请重新上传文件',
+      data: null,
+    }
+    return
+  }
+  const displayName = (depImportDisplayName.value || '').trim()
+  if (!displayName) {
+    depImportAlert.value = {
+      type: 'warning',
+      title: '请填写用例名称',
+      msg: '用例名称（中文）必填，将作为脚本管理列表显示的用例名',
+      data: null,
+    }
+    return
+  }
+  const formData = new FormData()
+  formData.append('display_name', displayName)
+  formData.append('from_doc_id', uploadedFile.value.docId)
+  await _runDepImport(formData)
+}
+
+// 统一的提交入口：模板上的「导入并生成场景脚本」按钮调用
+// 有 docId → 复用 Step 1 文件；否则 → 走传统手选上传
+const handleDepImportSubmit = async () => {
+  if (uploadedFile.value?.docId) {
+    await importDependencyDocFromUploaded()
+  } else {
+    await importDependencyDoc()
+  }
+}
+
+// 共享提交逻辑：发请求 + 处理成功/失败 alert
+const _runDepImport = async (formData) => {
   depImporting.value = true
   depImportAlert.value = null
-
   try {
-    const formData = new FormData()
-    formData.append('file', depImportFile.value)
-    formData.append('display_name', displayName)
-
     const resp = await api.importDependencyDoc(formData)
 
     if (resp.success) {

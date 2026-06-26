@@ -1504,8 +1504,9 @@ async def _persist_dependency_import_records(
 
 @router.post("/dependency-import", summary="导入依赖 JSON 触发 scenario 脚本生成")
 async def import_dependency_doc(
-    file: UploadFile = File(...),
     display_name: str = Form(..., description="用户输入的中文用例名称（脚本管理列表展示的「用例名称」）"),
+    file: Optional[UploadFile] = File(None),
+    from_doc_id: Optional[str] = Form(None, description="复用之前已上传文档的 docId（与 file 二选一）"),
 ):
     """接收预分析的依赖 JSON（ai-testmind 等工具产出），跳过 ApiAnalyzer/
     TestCaseGenerator 两个智能体，直接走 ScriptGeneratorAgent 的 scenario 分支
@@ -1515,6 +1516,11 @@ async def import_dependency_doc(
     展示的「用例名称」（TestCase.name）和脚本里的 class docstring；
     同时会被 LLM 翻译为英文 snake_case slug，拼上时间戳作为 .py 文件名。
     多 chain 的 JSON 暂只支持 1 条；超过 1 条直接 400 拒绝。
+
+    文件来源二选一：
+    - from_doc_id：复用文档工作流 Step 1 已上传到 uploads/ 的原文件，
+      省去用户重新选择文件
+    - file：直接上传一份新文件
     """
     display_name = (display_name or "").strip()
     if not display_name:
@@ -1522,12 +1528,33 @@ async def import_dependency_doc(
     if len(display_name) > 64:
         raise HTTPException(status_code=400, detail="用例名称不能超过 64 字符")
 
-    if not file or not file.filename:
-        raise HTTPException(status_code=400, detail="未选择文件")
-    if not file.filename.lower().endswith(".json"):
-        raise HTTPException(status_code=400, detail="仅支持 .json 文件")
+    # 文件来源：优先复用 from_doc_id，否则用新上传的 file
+    if from_doc_id:
+        existing_doc = await ApiDocument.filter(doc_id=from_doc_id).first()
+        if not existing_doc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"未找到 docId={from_doc_id} 对应的文档，请重新上传",
+            )
+        original_path = Path(existing_doc.file_path)
+        if not original_path.exists():
+            raise HTTPException(
+                status_code=410,
+                detail=f"原始文件已不存在: {existing_doc.file_path}，请重新上传",
+            )
+        raw = original_path.read_bytes()
+        source_filename = existing_doc.file_name
+    elif file and file.filename:
+        if not file.filename.lower().endswith(".json"):
+            raise HTTPException(status_code=400, detail="仅支持 .json 文件")
+        raw = await file.read()
+        source_filename = file.filename
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="需要提供 file 或 from_doc_id 之一",
+        )
 
-    raw = await file.read()
     file_size = len(raw)
 
     try:
@@ -1576,7 +1603,7 @@ async def import_dependency_doc(
 
     upload_dir = Path("./uploads")
     upload_dir.mkdir(exist_ok=True)
-    stored_name = f"{session_id}_{file.filename}"
+    stored_name = f"{session_id}_{source_filename}"
     file_path = upload_dir / stored_name
     file_path.write_bytes(raw)
 
@@ -1584,7 +1611,7 @@ async def import_dependency_doc(
         document, _interfaces = await _persist_dependency_import_records(
             doc_id=doc_id,
             session_id=session_id,
-            file_name=file.filename,
+            file_name=source_filename,
             file_path=str(file_path),
             file_size=file_size,
             api_info=api_info,
@@ -1659,7 +1686,7 @@ async def import_dependency_doc(
             "taskId": task_id,
             "sessionId": session_id,
             "docId": doc_id,
-            "fileName": file.filename,
+            "fileName": source_filename,
             "scenariosCount": len(scenarios),
             "endpointsCount": len(endpoints),
             "testCasesCount": len(test_cases),

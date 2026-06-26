@@ -85,6 +85,7 @@ def resolve_path(obj: Any, path: str) -> Any:
     """按点路径取值，支持 [] / [N] / [k=v]。空路径返回原对象。
     以 'response.' 开头的前缀会被剥掉（response 是 root 别名）。
     支持 | default N 语法：取值失败时返回默认值。
+    支持 | length 语法：把 walk 结果折算成长度（None → 0, list → len, 标量 → 1）。
     """
     if obj is None or not path:
         return obj
@@ -104,8 +105,23 @@ def resolve_path(obj: Any, path: str) -> Any:
             default_val = parts[1].strip()
         has_default = True
 
+    # 处理 | length 管道：作用于 walk 后的结果，把 None/list/标量统一折算成长度数字
+    agg_length = False
+    if p.endswith(" | length"):
+        p = p[:-len(" | length")].strip()
+        agg_length = True
+
     tokens = _PATH_TOKEN_RE.findall(p)
     result = _walk(obj, tokens)
+
+    # length 聚合优先于 default：filter 空集 → [] → length=0，不再走 default
+    if agg_length:
+        if result is None:
+            return 0
+        if isinstance(result, list):
+            return len(result)
+        return 1
+
     if has_default and (result is None or result == [] or result == 0):
         return default_val
     return result
@@ -121,6 +137,7 @@ def _walk(obj: Any, tokens: List[str]) -> Any:
         return [_walk(item, rest) for item in obj]
     if tok.startswith("[?(") and tok.endswith(")]"):
         # JSONPath filter: [?(@.field == 'value')] / [?(@.field != 1)]
+        # 标准语义：返回所有满足条件的项各自 walk 后的列表（无匹配 → []）
         m = _JSONPATH_FILTER_RE.match(tok)
         if not m or not isinstance(obj, list):
             return None
@@ -129,13 +146,11 @@ def _walk(obj: Any, tokens: List[str]) -> Any:
         raw_value = m.group(4) if m.group(4) is not None else (
             m.group(5) if m.group(5) is not None else (m.group(6) or "").strip()
         )
-        for item in obj:
-            if not isinstance(item, dict):
-                continue
-            field_val = item.get(field)
-            if _filter_match(field_val, op, raw_value):
-                return _walk(item, rest)
-        return None
+        matched = [
+            item for item in obj
+            if isinstance(item, dict) and _filter_match(item.get(field), op, raw_value)
+        ]
+        return [_walk(item, rest) for item in matched]
     if tok.startswith("[") and tok.endswith("]"):
         inner = tok[1:-1]
         if "=" in inner:
@@ -445,7 +460,15 @@ def _coerce_number(value: Any) -> Optional[float]:
 
 
 def _values_equal(actual: Any, target: Any) -> bool:
-    """equals 比较：原值相等优先；两边都能 coerce 成数字且数值相等也算等（容忍 '0' == 0）。"""
+    """equals 比较：原值相等优先；两边都能 coerce 成数字且数值相等也算等（容忍 '0' == 0）。
+
+    兼容 filter 改为返回列表后的回归：单元素 list 自动解包（[x] 与 x 视为相等）。
+    """
+    # 单元素 list 自动解包：避免 filter 改成返回列表后老 equals 用例回归
+    if isinstance(actual, list) and len(actual) == 1:
+        actual = actual[0]
+    if isinstance(target, list) and len(target) == 1:
+        target = target[0]
     if actual == target:
         return True
     a_num = _coerce_number(actual)

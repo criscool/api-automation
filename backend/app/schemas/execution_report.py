@@ -94,6 +94,11 @@ class ExecutionReportSummary(BaseModel):
     success_rate: float = Field(description="成功率")
     description: str = Field(description="执行描述")
     created_at: datetime = Field(description="创建时间")
+    # 关联用例名（用于列表展示「用例名称」列）
+    # 单条执行：1 条；批量执行：列出全部，前端按「首条 + 等 N 条」展示
+    # 上限 50 条，超出 case_count 仍为实际总数（前端显示「… 还有 K 条」）
+    case_names: List[str] = Field(default_factory=list, description="用例名列表（最多前 50 条）")
+    case_count: int = Field(default=0, description="实际用例总数")
 
 
 class ExecutionReportDetail(BaseModel):

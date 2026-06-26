@@ -323,7 +323,7 @@
 <script setup>
 import { ref, onMounted, h } from 'vue'
 import { Icon } from '@iconify/vue'
-import { NButton, NTag, useMessage, useDialog } from 'naive-ui'
+import { NButton, NTag, NTooltip, useMessage, useDialog } from 'naive-ui'
 import { 
   getExecutionReports, 
   getExecutionReportDetail, 
@@ -415,7 +415,53 @@ const documentOptions = ref([
 const reportColumns = [
   { type: 'selection' },
   { title: '执行ID', key: 'executionId', width: 150, ellipsis: true },
-  { title: '文档名称', key: 'documentName', width: 150, ellipsis: true },
+  {
+    title: '用例名称',
+    key: 'caseNames',
+    width: 200,
+    minWidth: 120,
+    resizable: true,
+    ellipsis: { tooltip: false },
+    render(row) {
+      const names = Array.isArray(row.caseNames) ? row.caseNames : []
+      const count = Number(row.caseCount || names.length || 0)
+      const first = names[0] || '-'
+      const display = count > 1 ? `${first} 等 ${count} 条` : first
+
+      // 用例名为空兜底：显示 description 灰字（多见于早期脚本级执行记录）
+      if (!names.length) {
+        return h('span', { style: 'color: #999;' }, row.description || display)
+      }
+
+      const overflow = count - names.length
+      const tooltipBody = h(
+        'div',
+        { style: 'max-width: 420px; max-height: 360px; overflow-y: auto;' },
+        [
+          ...names.map((n) => h('div', { style: 'padding: 2px 0;' }, n)),
+          overflow > 0
+            ? h('div', { style: 'padding-top: 4px; color: #999;' }, `… 还有 ${overflow} 条`)
+            : null,
+        ]
+      )
+      return h(
+        NTooltip,
+        { placement: 'top', trigger: 'hover' },
+        {
+          trigger: () =>
+            h(
+              'span',
+              {
+                style:
+                  'overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: inline-block; max-width: 100%; cursor: help;',
+              },
+              display
+            ),
+          default: () => tooltipBody,
+        }
+      )
+    },
+  },
   { title: '环境', key: 'environment', width: 100 },
   {
     title: '状态',
@@ -518,6 +564,8 @@ const loadReports = async () => {
         startTime: item.start_time,
         endTime: item.end_time,
         createdAt: item.created_at,
+        caseNames: item.case_names || [],
+        caseCount: item.case_count || 0,
       }))
       pagination.value.itemCount = response.data.total
       // 删除最后一页最后一条后自动跳回上一页

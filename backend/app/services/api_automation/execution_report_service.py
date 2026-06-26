@@ -6,10 +6,11 @@
 import os
 import json
 import uuid
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Set
 from datetime import datetime, timedelta
 from pathlib import Path
 from loguru import logger
+from collections import defaultdict
 import asyncio
 
 from tortoise.expressions import Q
@@ -17,7 +18,7 @@ from tortoise.functions import Count, Avg, Sum
 from tortoise.queryset import QuerySet
 
 from app.models.api_automation import (
-    TestExecution, ScriptExecutionResult, TestScript, 
+    TestExecution, ScriptExecutionResult, TestScript, TestCase,
     ApiDocument, ApiInterface
 )
 from app.schemas.execution_report import (
@@ -75,10 +76,84 @@ class ExecutionReportService:
             executions = await TestExecution.filter(filters).select_related(
                 "document"
             ).order_by("-created_at").offset(offset).limit(query.page_size)
-            
+
+            # 批量反查用例名：避免 N+1
+            # 路径 A：execution_config["test_ids"] / summary["groups"][*]["test_ids"]（用例级执行）
+            # 路径 B：execution_config["script_id"/"script_ids"] → TestScript.file_path → TestCase（脚本级执行兜底）
+            CASE_LIMIT = 50
+            exec_test_ids: Dict[str, List[str]] = {}
+            exec_script_paths: Dict[str, Set[str]] = defaultdict(set)
+            all_test_ids: Set[str] = set()
+            all_script_ids: Set[str] = set()
+            for ex in executions:
+                cfg = ex.execution_config or {}
+                summ = ex.summary or {}
+                tids: List[str] = list(cfg.get("test_ids") or [])
+                for g in (summ.get("groups") or []):
+                    tids.extend(g.get("test_ids") or [])
+                # 保序去重
+                seen: set = set()
+                ordered: List[str] = []
+                for tid in tids:
+                    if tid not in seen:
+                        seen.add(tid)
+                        ordered.append(tid)
+                exec_test_ids[ex.execution_id] = ordered
+                all_test_ids.update(ordered)
+
+                if not ordered:
+                    sids: List[str] = []
+                    if cfg.get("script_id"):
+                        sids.append(cfg["script_id"])
+                    sids.extend(cfg.get("script_ids") or [])
+                    if sids:
+                        exec_script_paths[ex.execution_id]  # 占位，下面填
+                        all_script_ids.update(sids)
+                        # 暂存 sids 备查
+                        exec_script_paths[ex.execution_id] = set(sids)
+
+            # 一次性查 test_id → name
+            case_name_map: Dict[str, str] = {}
+            if all_test_ids:
+                rows = await TestCase.filter(test_id__in=list(all_test_ids)).only("test_id", "name")
+                case_name_map = {r.test_id: r.name for r in rows}
+
+            # 兜底：script_id → file_path → TestCase.name
+            script_id_to_path: Dict[str, str] = {}
+            path_to_names: Dict[str, List[str]] = defaultdict(list)
+            if all_script_ids:
+                scripts = await TestScript.filter(
+                    script_id__in=list(all_script_ids)
+                ).only("script_id", "file_path")
+                for s in scripts:
+                    if s.file_path:
+                        script_id_to_path[s.script_id] = s.file_path
+                paths = set(script_id_to_path.values())
+                if paths:
+                    rows = await TestCase.filter(
+                        script_file_path__in=list(paths), is_active=True
+                    ).only("script_file_path", "name")
+                    for r in rows:
+                        path_to_names[r.script_file_path].append(r.name)
+
+            def derive_cases(ex_id: str) -> Tuple[List[str], int]:
+                tids = exec_test_ids.get(ex_id, [])
+                if tids:
+                    names = [case_name_map[t] for t in tids if t in case_name_map]
+                    return names[:CASE_LIMIT], len(names)
+                # 脚本级兜底
+                sids = exec_script_paths.get(ex_id, set())
+                names: List[str] = []
+                for sid in sids:
+                    path = script_id_to_path.get(sid)
+                    if path:
+                        names.extend(path_to_names.get(path, []))
+                return names[:CASE_LIMIT], len(names)
+
             # 转换为响应格式
             items = []
             for execution in executions:
+                case_names, case_count = derive_cases(execution.execution_id)
                 item = ExecutionReportSummary(
                     execution_id=execution.execution_id,
                     session_id=execution.session_id,
@@ -94,7 +169,9 @@ class ExecutionReportService:
                     failed_tests=execution.failed_tests,
                     success_rate=execution.success_rate,
                     description=execution.description,
-                    created_at=execution.created_at
+                    created_at=execution.created_at,
+                    case_names=case_names,
+                    case_count=case_count,
                 )
                 items.append(item)
             
