@@ -126,6 +126,7 @@ backend/generated_tests/testcases/test_*
 backend/generated_tests/testcases/_cleanup_demo.py
 backend/fix_doc.py
 backend/sync_demo.py
+mcp-playwright/recordings/c535cef4a9864f7b95a32e23fb27289b.spec.ts
 docs/dependency-import-rename-design.md
 
 # AI 生成的 API 封装模块（不入库，运行时生成）

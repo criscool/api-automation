@@ -109,9 +109,46 @@
               <span>{{ currentCategoryName }}</span>
               <n-space v-if="selectedIds.length > 0">
                 <n-text depth="3">已选 {{ selectedIds.length }} 条</n-text>
-                <n-dropdown trigger="click" :options="batchMoveOptions" @select="onBatchMoveSelect">
-                  <n-button size="small">移动到...</n-button>
-                </n-dropdown>
+                <n-popover
+                  trigger="click"
+                  placement="bottom-end"
+                  :show-arrow="false"
+                  raw
+                  style="border-radius: 6px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); background: var(--n-color);"
+                >
+                  <template #trigger>
+                    <n-button size="small">移动到...</n-button>
+                  </template>
+                  <div style="width: 260px; padding: 8px;">
+                    <n-input
+                      v-model:value="moveTreeFilter"
+                      placeholder="搜索分类..."
+                      size="small"
+                      clearable
+                      style="margin-bottom: 6px"
+                    />
+                    <div
+                      class="move-option-uncategorized"
+                      @click="onBatchMoveSelect('__uncategorized__')"
+                    >
+                      <Icon icon="mdi:folder-open-outline" style="margin-right: 6px" />
+                      未分类
+                    </div>
+                    <div style="max-height: 50vh; overflow-y: auto; margin-top: 4px">
+                      <n-tree
+                        :data="categoryTree"
+                        :pattern="moveTreeFilter"
+                        key-field="category_id"
+                        label-field="name"
+                        children-field="children"
+                        block-line
+                        :show-irrelevant-nodes="false"
+                        :node-props="moveTreeNodeProps"
+                        default-expand-all
+                      />
+                    </div>
+                  </div>
+                </n-popover>
                 <n-button size="small" type="primary" @click="batchExecute" :disabled="batchExecuting" :loading="batchExecuting">批量执行</n-button>
               </n-space>
             </div>
@@ -284,7 +321,7 @@
 
 <script setup>
 import { ref, reactive, computed, h, onMounted } from 'vue'
-import { NButton, NTag, NSpace, NDropdown, NTree, NTreeSelect, NTooltip, useMessage, useDialog } from 'naive-ui'
+import { NButton, NTag, NSpace, NDropdown, NTree, NTreeSelect, NTooltip, NPopover, useMessage, useDialog } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import api from '@/api'
 import { formatTime } from '@/utils'
@@ -354,6 +391,18 @@ const batchMoveOptions = computed(() => {
   }
   walk(categoryTree.value, '')
   return options
+})
+
+// 「移动到...」popover 的搜索过滤词
+const moveTreeFilter = ref('')
+
+// n-tree 节点点击 → 选目标分类
+const moveTreeNodeProps = ({ option }) => ({
+  style: 'cursor: pointer;',
+  onClick: (e) => {
+    e.stopPropagation()
+    onBatchMoveSelect(option.category_id)
+  },
 })
 
 const testTypeOptions = [
@@ -917,6 +966,12 @@ onMounted(() => {
 }
 .uncategorized-node:hover { background: var(--n-color-hover); }
 .uncategorized-node.active { background: var(--n-color-selected); font-weight: 600; }
+
+.move-option-uncategorized {
+  display: flex; align-items: center; padding: 6px 8px; border-radius: 4px;
+  cursor: pointer; font-size: 14px;
+}
+.move-option-uncategorized:hover { background: var(--n-color-hover); }
 
 .pagination-wrapper { display: flex; justify-content: flex-end; margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--n-border-color); }
 

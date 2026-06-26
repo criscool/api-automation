@@ -31,7 +31,7 @@ if ! command -v node >/dev/null 2>&1; then
     curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
     sudo apt-get install -y nodejs"
 fi
-NODE_MAJOR="$(node -p 'process.versions.node.split(\".\")[0]')"
+NODE_MAJOR="$(node -p "process.versions.node.split('.')[0]")"
 if [ "$NODE_MAJOR" -lt 18 ]; then
   fail "Node.js 版本过低(当前 $(node -v)),需要 >=18.17。"
 fi
