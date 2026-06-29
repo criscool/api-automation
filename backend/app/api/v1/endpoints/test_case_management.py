@@ -295,6 +295,37 @@ async def get_all_test_cases(
         raise HTTPException(status_code=500, detail=f"获取用例列表失败: {str(e)}")
 
 
+class BatchMoveTestCaseRequest(BaseModel):
+    test_ids: List[str] = Field(..., description="用例 test_id 列表")
+    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出")
+
+
+@router.put("/batch-move", summary="批量移动用例")
+async def batch_move_test_cases(req: BatchMoveTestCaseRequest):
+    try:
+        cat = None
+        if req.category_id:
+            cat = await TestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
+            if not cat:
+                raise HTTPException(status_code=404, detail="目标分类不存在")
+
+        updated = await TestCase.filter(
+            test_id__in=req.test_ids, is_active=True
+        ).update(category=cat)
+
+        return {
+            "code": 200,
+            "msg": f"已移动 {updated} 条用例",
+            "data": {"moved": updated},
+            "success": True,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"批量移动用例失败: {e}")
+        raise HTTPException(status_code=500, detail=f"批量移动失败: {e}")
+
+
 @router.get("/{test_id}", summary="获取用例详情")
 async def get_test_case_detail(test_id: str):
     """获取单条用例详情"""
@@ -786,9 +817,6 @@ class MoveTestCaseRequest(BaseModel):
     category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出")
 
 
-class BatchMoveTestCaseRequest(BaseModel):
-    test_ids: List[str] = Field(..., description="用例 test_id 列表")
-    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出")
 
 
 @router.put("/{test_id}/move", summary="移动单条用例到分类")
@@ -813,29 +841,3 @@ async def move_test_case(test_id: str, req: MoveTestCaseRequest):
     except Exception as e:
         logger.error(f"移动用例失败: {e}")
         raise HTTPException(status_code=500, detail=f"移动失败: {e}")
-
-
-@router.put("/batch-move", summary="批量移动用例")
-async def batch_move_test_cases(req: BatchMoveTestCaseRequest):
-    try:
-        cat = None
-        if req.category_id:
-            cat = await TestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
-            if not cat:
-                raise HTTPException(status_code=404, detail="目标分类不存在")
-
-        updated = await TestCase.filter(
-            test_id__in=req.test_ids, is_active=True
-        ).update(category=cat)
-
-        return {
-            "code": 200,
-            "msg": f"已移动 {updated} 条用例",
-            "data": {"moved": updated},
-            "success": True,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"批量移动用例失败: {e}")
-        raise HTTPException(status_code=500, detail=f"批量移动失败: {e}")

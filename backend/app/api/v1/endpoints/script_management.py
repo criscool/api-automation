@@ -70,6 +70,47 @@ class ScriptContentUpdateRequest(BaseModel):
     content: str = Field(..., min_length=1, description="新的脚本源代码（不能为空）")
 
 
+# ==================== JUnit XML 统计解析 ====================
+
+
+def _parse_junit_stats(junit_path) -> tuple:
+    """从 pytest 生成的 junit.xml 中精确提取测试统计。
+
+    返回 (total, passed, failed, errors, skipped)。
+    解析失败时返回全 0，调用方会回退字符串匹配。
+    """
+    import xml.etree.ElementTree as ET
+    try:
+        tree = ET.parse(str(junit_path))
+        root = tree.getroot()
+
+        # pytest 输出格式：<testsuites> 包一个或多个 <testsuite>
+        if root.tag == "testsuites":
+            suites = root.findall("testsuite")
+            if not suites:
+                # 尝试把自己当 testsuite（极端兼容）
+                return _parse_one_suite(root)
+            total = passed = failed = errors = skipped = 0
+            for ts in suites:
+                t, p, f, e, s = _parse_one_suite(ts)
+                total += t; passed += p; failed += f; errors += e; skipped += s
+            return total, passed, failed, errors, skipped
+        elif root.tag == "testsuite":
+            return _parse_one_suite(root)
+        return 0, 0, 0, 0, 0
+    except Exception:
+        return 0, 0, 0, 0, 0
+
+
+def _parse_one_suite(suite) -> tuple:
+    """解析单个 <testsuite>，返回 (total, passed, failed, errors, skipped)。"""
+    t = int(suite.attrib.get("tests", 0))
+    f = int(suite.attrib.get("failures", 0))
+    e = int(suite.attrib.get("errors", 0))
+    s = int(suite.attrib.get("skipped", 0))
+    return t, t - f - e - s, f, e, s
+
+
 # ==================== 手动脚本注册API ====================
 
 
@@ -618,12 +659,18 @@ async def _execute_script_in_background(
         end_time = datetime.now()
         duration = (end_time - start_time).total_seconds()
 
-        # 解析统计
-        passed = stdout.count(" PASSED")
-        failed = stdout.count(" FAILED")
-        errors = stdout.count(" ERROR")
-        skipped = stdout.count(" SKIPPED")
-        total = passed + failed + errors + skipped
+        # 解析统计 —— 从 junit.xml 读取，不再靠字符串匹配 stdout
+        # 字符串匹配（stdout.count(" PASSED") 等）在编码 / 输出格式变化时全 0，
+        # junit.xml 是 pytest 的机器可读报告，统计永远精确。
+        if junit_path.exists():
+            total, passed, failed, errors, skipped = _parse_junit_stats(junit_path)
+        else:
+            # 极端兜底：junit.xml 都没生成，回退字符串匹配
+            passed = stdout.count(" PASSED")
+            failed = stdout.count(" FAILED")
+            errors = stdout.count(" ERROR")
+            skipped = stdout.count(" SKIPPED")
+            total = passed + failed + errors + skipped
         success_rate = (passed / total * 100) if total > 0 else 0.0
 
         # 生成 Allure 静态站点
@@ -815,11 +862,14 @@ async def _run_pytest_for_one_script(
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
-    passed = stdout.count(" PASSED")
-    failed = stdout.count(" FAILED")
-    errors = stdout.count(" ERROR")
-    skipped = stdout.count(" SKIPPED")
-    total = passed + failed + errors + skipped
+    if junit_path.exists():
+        total, passed, failed, errors, skipped = _parse_junit_stats(junit_path)
+    else:
+        passed = stdout.count(" PASSED")
+        failed = stdout.count(" FAILED")
+        errors = stdout.count(" ERROR")
+        skipped = stdout.count(" SKIPPED")
+        total = passed + failed + errors + skipped
     success_rate = (passed / total * 100) if total > 0 else 0.0
 
     # 每脚本独立 Allure 站点（可选，便于单点查看）

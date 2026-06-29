@@ -24,7 +24,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 
 _STEP_REF_RE = re.compile(r"^step:(\d+)\.dataOut\.(.+)$")
@@ -221,13 +221,21 @@ def extract_data_out(
 
 
 def apply_data_in(
-    body_tmpl: Optional[Dict[str, Any]],
+    body_tmpl: Optional[Union[Dict[str, Any], str]],
     query_tmpl: Optional[Dict[str, Any]],
     path_tmpl: str,
     data_in: Optional[Dict[str, Dict[str, Any]]],
     ctx: Dict[int, Dict[str, Any]],
-) -> Tuple[Dict[str, Any], Dict[str, Any], str]:
+) -> Tuple[Any, Dict[str, Any], str]:
     """把 body/query/path 模板按 data_in 填好。返回 (body, query, path)。"""
+    # 字符串 body：整个 body 被 dataIn 的 "body" key 直接替换
+    if isinstance(body_tmpl, str):
+        d = dict(data_in or {})
+        if "body" in d and isinstance(d["body"], dict) and d["body"].get("from"):
+            value = resolve_step_ref(d["body"]["from"], ctx)
+            return (value if value is not None else body_tmpl, dict(query_tmpl or {}), path_tmpl or "")
+        return body_tmpl, dict(query_tmpl or {}), path_tmpl or ""
+
     body = _deep_copy(body_tmpl) if isinstance(body_tmpl, dict) else {}
     query = dict(query_tmpl or {})
     path = path_tmpl or ""

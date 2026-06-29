@@ -419,7 +419,8 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
             lines.append("            ctx,")
             lines.append("        )")
 
-            # HTTP 调用：GET / DELETE 走 query；POST/PUT/PATCH 同时支持 body+query
+            # HTTP 调用：字符串 body 用 data= 避免 JSON 编码加引号；dict 用 json=
+            body_arg = "data=body" if isinstance(step.body, str) else "json=body"
             if method_lower == "get":
                 lines.append("        resp = api_client.get(path, params=query or None)")
             elif method_lower == "delete":
@@ -427,12 +428,12 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
             elif method_lower in ("post", "put", "patch"):
                 lines.append(
                     f"        resp = api_client.{method_lower}("
-                    f"path, json=body, params=query or None)"
+                    f"path, {body_arg}, params=query or None)"
                 )
             else:
                 lines.append(
                     f"        resp = api_client.request({method_lower.upper()!r}, "
-                    f"path, json=body, params=query or None)"
+                    f"path, {body_arg}, params=query or None)"
                 )
 
             lines.append(

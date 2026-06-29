@@ -9,7 +9,7 @@ API自动化智能体数据模型 - 重新设计版本
 4. 支持扩展，便于后续功能增强
 """
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from enum import Enum
 from pydantic import BaseModel, Field
 import uuid
@@ -1026,7 +1026,7 @@ class ScenarioStepSpec(BaseModel):
     path: str = Field(..., description="API 路径（含 :id 或 {id} 路径参数）")
     path_params: Dict[str, Any] = Field(default_factory=dict, description="路径参数 {var_name: example_value}")
     query: Dict[str, Any] = Field(default_factory=dict, description="query 参数模板")
-    body: Dict[str, Any] = Field(default_factory=dict, description="请求体模板")
+    body: Union[Dict[str, Any], str] = Field(default_factory=dict, description="请求体模板（dict 或纯字符串）")
     body_shape: List[str] = Field(default_factory=list, description="bodyShape 标识（区分同 path 的多变体）")
     response_example: Dict[str, Any] = Field(default_factory=dict, description="响应示例（用于生成默认断言）")
     # 形如 {"asset_type": {"from": "step:1.dataOut.asset_type", "optional": false, "template": null}}

@@ -52,6 +52,63 @@ EndpointKey = Tuple[str, str, FrozenSet[str]]
 _STEP_REF_RE = re.compile(r"^step:(\d+)\.dataOut\.(.+)$")
 
 
+def _safe_dict(value: Any) -> Dict[str, Any]:
+    """安全转 dict，兼容 list-of-pairs、空值、字符串等非常规输入。"""
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return {}
+    if isinstance(value, (list, tuple)):
+        if len(value) == 0:
+            return {}
+        try:
+            return dict(value)
+        except (ValueError, TypeError, IndexError):
+            pass
+    return {}
+
+
+def _normalize_body(
+    raw_body: Any,
+    body_shape: List[str],
+    data_in: Dict[str, Any],
+) -> Tuple[Any, Dict[str, Any]]:
+    """归一化 body 值，使之能被 apply_data_in 正确消费。
+
+    - dict → 原样返回
+    - string/number 且 dataIn 有顶层 "body" key（整个 body 动态替换）→ 原样返回
+    - string/number 且 dataIn 无 "body" → 用 bodyShape 或 dataIn 子 key 推断包装 key，
+      兜底 "_value"
+    """
+    if isinstance(raw_body, dict):
+        return raw_body, dict(data_in or {})
+    if raw_body is None:
+        return {}, dict(data_in or {})
+
+    data_in = dict(data_in or {})
+
+    # dataIn 有 "body" 顶层 key → 整个 body 会被 apply_data_in 动态替换，直接传字符串
+    if "body" in data_in and isinstance(data_in["body"], dict) and data_in["body"].get("from"):
+        return raw_body, data_in
+
+    # 需要有 dict 包装 → 用 bodyShape 或 dataIn 子 key 推断包装 key
+    wrapper_key = ""
+    if body_shape:
+        wrapper_key = body_shape[0]
+    if not wrapper_key:
+        for k in data_in:
+            if k.startswith("body.") and len(k) > 5:
+                wrapper_key = k[len("body."):]
+                break
+    if not wrapper_key:
+        wrapper_key = "_value"
+
+    if wrapper_key and "body" in data_in and isinstance(data_in.get("body"), dict):
+        data_in[f"body.{wrapper_key}"] = data_in.pop("body")
+
+    return {wrapper_key: raw_body}, data_in
+
+
 class DependencyDocConverter:
     """依赖 JSON 文档 → ScriptGenerationInput 所需各组件的转换器。
 
@@ -276,20 +333,27 @@ class DependencyDocConverter:
                 endpoint_block = raw_step.get("endpoint", {}) or {}
                 request_block = endpoint_block.get("request", {}) or {}
 
+                # 归一化 body + dataIn（处理字符串/数字等非 dict body）
+                norm_body, norm_data_in = _normalize_body(
+                    request_block.get("body"),
+                    endpoint_block.get("bodyShape") or [],
+                    raw_step.get("dataIn") or {},
+                )
+
                 step_spec = ScenarioStepSpec(
                     step=step_no,
                     purpose=str(raw_step.get("purpose") or ""),
                     method=HttpMethod(str(endpoint_block.get("method", "GET")).upper()),
                     path=str(endpoint_block.get("path") or ""),
-                    path_params=dict(request_block.get("pathParams") or {}),
-                    query=dict(request_block.get("query") or {}),
-                    body=dict(request_block.get("body") or {}),
+                    path_params=_safe_dict(request_block.get("pathParams")),
+                    query=_safe_dict(request_block.get("query")),
+                    body=norm_body,
                     body_shape=[str(s) for s in (endpoint_block.get("bodyShape") or [])],
-                    response_example=dict(
-                        (endpoint_block.get("response") or {}).get("example") or {}
+                    response_example=_safe_dict(
+                        (endpoint_block.get("response") or {}).get("example")
                     ),
-                    data_in=dict(raw_step.get("dataIn") or {}),
-                    data_out=dict(raw_step.get("dataOut") or {}),
+                    data_in=_safe_dict(norm_data_in),
+                    data_out=_safe_dict(raw_step.get("dataOut")),
                     assert_spec=raw_step.get("assert"),
                     depends_on=[int(x) for x in (raw_step.get("dependsOn") or [])],
                     related_endpoint_id=ep.endpoint_id,

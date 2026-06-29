@@ -85,13 +85,14 @@ class BaseClient:
     def _build_headers(self, headers: dict = None) -> dict:
         """构建请求头，自动注入 authorization
 
-        默认带 Accept: application/json 让做内容协商的接口走 JSON 分支
-        （某些后端遇到 requests 默认的 */* 会 500）。
-        下载二进制 / 非 JSON 响应时通过 headers={'Accept': 'application/octet-stream'} 覆盖。
+        Accept 设为 application/json, */*;q=0.9：
+        - JSON 接口优先匹配 application/json（权重最高）
+        - 导出/下载接口不认 application/json 时回落 */*，避免 406
+        - 如果某个后端连 */* 都 500，调用方传 headers={'Accept': 'application/json'} 硬覆盖
         """
         request_headers = {
             "Content-Type": "application/json",
-            "Accept": "application/json",
+            "Accept": "application/json, */*;q=0.9",
             "X-Requested-By": "XMLHttpRequest",
             "X-Requested-With": "XMLHttpRequest",
         }
