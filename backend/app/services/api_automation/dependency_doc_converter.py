@@ -340,6 +340,14 @@ class DependencyDocConverter:
                     raw_step.get("dataIn") or {},
                 )
 
+                # 期望状态码：默认 200；依赖 JSON 里 endpoint.response.status 可覆盖
+                # 容错：值可能是 "201" / 201 / "2xx"，非整数字面值降级为 200
+                _raw_status = (endpoint_block.get("response") or {}).get("status")
+                try:
+                    expected_status = int(_raw_status) if _raw_status not in (None, "") else 200
+                except (ValueError, TypeError):
+                    expected_status = 200
+
                 step_spec = ScenarioStepSpec(
                     step=step_no,
                     purpose=str(raw_step.get("purpose") or ""),
@@ -358,6 +366,7 @@ class DependencyDocConverter:
                     depends_on=[int(x) for x in (raw_step.get("dependsOn") or [])],
                     related_endpoint_id=ep.endpoint_id,
                     related_test_case_id=case_index.get((display_name or chain_name).strip()),
+                    expected_status=expected_status,
                 )
                 steps.append(step_spec)
 

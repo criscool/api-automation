@@ -1038,6 +1038,7 @@ class ScenarioStepSpec(BaseModel):
     depends_on: List[int] = Field(default_factory=list, description="依赖的前序步骤 step 序号")
     related_endpoint_id: Optional[str] = Field(None, description="关联的 ParsedEndpoint.endpoint_id")
     related_test_case_id: Optional[str] = Field(None, description="关联的 GeneratedTestCase.test_case_id")
+    expected_status: int = Field(200, description="期望的 HTTP 状态码（来自依赖 JSON 的 endpoint.response.status，默认 200）")
 
 
 class ScenarioTestCase(BaseModel):

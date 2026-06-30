@@ -419,16 +419,17 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
             lines.append("            ctx,")
             lines.append("        )")
 
-            # HTTP 调用：字符串 body 用 data= 避免 JSON 编码加引号；dict 用 json=
+            # 字符串 body 用 data= 避免 JSON 编码加引号；dict 用 json=
             body_arg = "data=body" if isinstance(step.body, str) else "json=body"
             if method_lower == "get":
                 lines.append("        resp = api_client.get(path, params=query or None)")
             elif method_lower == "delete":
                 lines.append("        resp = api_client.delete(path, params=query or None)")
             elif method_lower in ("post", "put", "patch"):
+                extra = ', headers={"Accept": "application/json"}' if isinstance(step.body, str) else ""
                 lines.append(
                     f"        resp = api_client.{method_lower}("
-                    f"path, {body_arg}, params=query or None)"
+                    f"path, {body_arg}, params=query or None{extra})"
                 )
             else:
                 lines.append(
@@ -436,8 +437,10 @@ class ScriptGeneratorAgent(BaseApiAutomationAgent):
                     f"path, {body_arg}, params=query or None)"
                 )
 
+            # 期望状态码来自 ScenarioStepSpec.expected_status（依赖 JSON
+            # 的 endpoint.response.status，缺省 200）
             lines.append(
-                f"        assert resp.status_code == 200, "
+                f"        assert resp.status_code == {step.expected_status}, "
                 f'f"step {step.step} status={{resp.status_code}}, body={{resp.text[:200]}}"'
             )
             lines.append("        resp_json = resp.json() if resp.content else {}")
