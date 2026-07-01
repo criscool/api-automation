@@ -215,10 +215,13 @@ def extract_data_out(
     for var, spec in (data_out_spec or {}).items():
         if not isinstance(spec, dict):
             continue
-        raw = resolve_path(response_json, spec.get("path", ""))
+        path = spec.get("path", "")
+        raw = resolve_path(response_json, path)
         val = _pick_first(raw) if isinstance(raw, list) else raw
-        # 无效路径或空对象 → 用 value 字段兜底
-        if (val is None) or (isinstance(val, dict) and not val):
+        # 路径无效（无合法 token）或结果为空 → 用 value 字段兜底
+        if (not path or not _PATH_TOKEN_RE.findall(path)) and "value" in spec:
+            val = spec["value"]
+        elif val is None or (isinstance(val, dict) and not val):
             val = spec.get("value")
         result[var] = val
     return result

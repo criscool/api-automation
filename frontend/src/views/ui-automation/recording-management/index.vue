@@ -103,7 +103,7 @@
         <n-space vertical>
           <n-descriptions :column="2" size="small" bordered>
             <n-descriptions-item label="状态">
-              <n-tag :type="statusTagType(liveSession?.status)">{{ liveSession?.status || '-' }}</n-tag>
+              <n-tag :type="statusTagType(liveSession?.status)">{{ statusLabel(liveSession?.status) }}</n-tag>
             </n-descriptions-item>
             <n-descriptions-item label="耗时(ms)">{{ liveSession?.duration_ms || 0 }}</n-descriptions-item>
             <n-descriptions-item label="目标 URL" :span="2">
@@ -157,7 +157,7 @@
               <n-text code>{{ detail.session_id }}</n-text>
             </n-descriptions-item>
             <n-descriptions-item label="状态">
-              <n-tag :type="statusTagType(detail.status)">{{ detail.status }}</n-tag>
+              <n-tag :type="statusTagType(detail.status)">{{ statusLabel(detail.status) }}</n-tag>
             </n-descriptions-item>
             <n-descriptions-item label="耗时(ms)">{{ detail.duration_ms }}</n-descriptions-item>
             <n-descriptions-item label="目标 URL" :span="2">{{ detail.target_url }}</n-descriptions-item>
@@ -227,6 +227,9 @@ import { Icon } from '@iconify/vue'
 import { NButton, NTag, NSpace, NRadio, NRadioGroup, useDialog } from 'naive-ui'
 import AppPage from '@/components/page/AppPage.vue'
 import api from '@/api'
+import { useUserStore } from '@/store'
+
+const userStore = useUserStore()
 
 const router = useRouter()
 const dialog = useDialog()
@@ -261,11 +264,26 @@ function statusTagType(status) {
   return 'default'
 }
 
+function statusLabel(status) {
+  const map = {
+    ready: '成功',
+    failed: '失败',
+    timeout: '失败(超时)',
+    cancelled: '已取消',
+    recording: '进行中',
+    launching: '进行中',
+    postprocessing: '进行中',
+    idle: '空闲',
+    interrupted: '已中断',
+  }
+  return map[status] || status || '-'
+}
+
 const columns = [
   { title: '名称', key: 'name', minWidth: 180, ellipsis: { tooltip: true } },
   {
     title: '状态', key: 'status', width: 110,
-    render: (row) => h(NTag, { type: statusTagType(row.status), size: 'small' }, { default: () => row.status }),
+    render: (row) => h(NTag, { type: statusTagType(row.status), size: 'small' }, { default: () => statusLabel(row.status) }),
   },
   {
     title: '风格', key: 'script_style', width: 110,
@@ -361,7 +379,7 @@ async function submitCreate() {
       target_url: createForm.target_url,
       storage_state_relpath: createForm.storage_state_relpath || '',
       timeout_seconds: createForm.timeout_seconds || null,
-      created_by: 'manual',
+      created_by: userStore.name || 'manual',
       script_style: createForm.script_style || 'playwright',
       prefetch_page_semantics: !!createForm.prefetch_page_semantics,
     })
@@ -476,11 +494,35 @@ async function onCancelLive() {
 
 async function onCancel(sessionId, fromLive = false) {
   try {
-    await api.uiCancelRecording(sessionId)
-    window.$message?.success('已发送取消信号')
-    if (!fromLive) loadList()
+    const res = await api.uiCancelRecording(sessionId)
+    // 用后端返回的精确消息（"已取消（子进程已终止 + DB 状态已更新）"等）
+    const msg = res?.msg || '已发送取消信号'
+    window.$message?.success(msg)
+
+    // 无论从哪里发起，都刷新列表让状态实时反映
+    await loadList()
+
+    // 如果是从实时进度抽屉发起的取消：
+    // 1) 同步刷新抽屉里的 liveSession 状态（避免显示"启动中"僵尸）
+    // 2) 状态确认为终态后自动关闭抽屉
+    if (fromLive && liveSession.value?.session_id === sessionId) {
+      try {
+        const detailRes = await api.uiGetRecording(sessionId)
+        const latest = detailRes?.data ?? detailRes
+        if (latest) {
+          liveSession.value = { ...liveSession.value, ...latest }
+        }
+        // 已进入终态 → 自动关抽屉
+        const terminal = ['cancelled', 'failed', 'timeout', 'ready', 'interrupted']
+        if (latest && terminal.includes(latest.status)) {
+          setTimeout(() => { liveVisible.value = false }, 800)  // 让用户看清最终状态一秒钟
+        }
+      } catch {
+        // 刷新失败不影响主流程
+      }
+    }
   } catch (e) {
-    window.$message?.error('取消失败:' + (e.message || e))
+    window.$message?.error('取消失败:' + (e?.response?.data?.detail || e.message || e))
   }
 }
 

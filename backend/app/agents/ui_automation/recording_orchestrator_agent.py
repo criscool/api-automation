@@ -554,6 +554,18 @@ class UiRecordingOrchestratorAgent(BaseApiAutomationAgent):
         # (优先级 2.5 prompt 规则的最后一道安全网)
         script_content = self._rewrite_text_nth_anti_pattern(script_content)
 
+        # 兜底:复制资源默认名带时间戳，精确匹配注定跨次失败
+        # 提取 _copy_ 前的稳定前缀，改写为 hasText 包含匹配
+        script_content = self._rewrite_copy_timestamp_pattern(script_content)
+
+        # 兜底:搜索按钮 click 改写为最近 fill 输入框的 press('Enter')
+        # (feedback_search_prefer_enter：搜索/筛选一律用回车，click 易超时)
+        script_content = self._rewrite_search_click_to_press_enter(script_content)
+
+        # 兜底:表格行内 checkbox 深层 CSS 定位 → 业务文案 xpath 定位
+        # (含状态 class 的链式 CSS 跨环境失败率高，改写为 xpath 用业务文案锚定行)
+        script_content = self._rewrite_table_checkbox_to_xpath(script_content)
+
         # 兜底:prompt 第 9 条 + 硬禁令 F 段 DeepSeek 不一定听,deterministic 保证至少有一句 expect
         # (feedback_ui_script_must_have_assertion 反复强调的"假新闻"反模式必须封死)
         script_content = self._ensure_trailing_assertion(script_content)
@@ -675,6 +687,85 @@ class UiRecordingOrchestratorAgent(BaseApiAutomationAgent):
         re.VERBOSE,
     )
 
+    # 匹配 getByRole('<role>', { name: '<prefix>_copy_<14位数字><后续可能有IP/编号/域名等动态内容>' })
+    # copy 操作会自动带时间戳 → 每次运行都不同 → 精确 name 匹配注定失败
+    # 提取 _copy_ 前的稳定前缀，改写为 hasText 包含匹配
+    _COPY_TIMESTAMP_NAME_PATTERN = re.compile(
+        r"""getByRole\(\s*
+            (?P<q1>['"])(?P<role>[a-zA-Z]+)(?P=q1)\s*,\s*
+            \{\s*name:\s*
+            (?P<q2>['"])(?P<prefix>[^'"]*?_copy_)\d{8,14}[^'"]*(?P=q2)
+            (?:\s*,\s*[^}]*)?                          # 可选 exact: true 等
+            \s*\}\s*
+        \)""",
+        re.VERBOSE,
+    )
+
+    # 【搜索按钮识别】覆盖两种常见 codegen 产物：
+    # 1) 显式按钮 name：getByRole('button', { name: '搜索'|'查询'|'Search'|'search' })
+    # 2) ant-design 搜索输入框自带的搜索按钮：.ant-input-search-button
+    # 3) 业务侧常见 class：.search-btn
+    _SEARCH_BUTTON_CLICK_PATTERN = re.compile(
+        r"""await\s+page\.(?:
+            getByRole\(\s*['"]button['"]\s*,\s*\{\s*name:\s*
+              ['"](?:搜索|查询|检索|Search|SEARCH|search)['"]
+              (?:\s*,\s*[^}]*)?
+            \s*\}\s*\)
+            |
+            locator\(\s*['"](?:\.ant-input-search-button|\.search-btn)['"]\s*\)
+        )\.click\(\s*\)\s*;?""",
+        re.VERBOSE,
+    )
+
+    # 【fill 定位记忆】识别形如 `await page.<selector>.fill('xxx');`
+    # 抓取 selector 部分（不含 .fill(...)），用于把后续搜索按钮 click 改写为该 selector.press('Enter')
+    _FILL_SELECTOR_PATTERN = re.compile(
+        r"""await\s+(?P<sel>page\..+?)\.fill\(""",
+        re.VERBOSE,
+    )
+
+    # 【业务关键字捕获】用于把表格 checkbox 点击改写为 xpath 业务定位
+    # 匹配几种 codegen 常见带业务文案的调用：
+    #   .fill('X')                              — 搜索框输入
+    #   getByText('X')  / getByTitle('X')       — 文本定位
+    #   { hasText: 'X' } / { hasText: /X/ }     — filter 链
+    #   getByRole('...', { name: 'X' })         — role name
+    _BIZ_TEXT_CAPTURE_PATTERN = re.compile(
+        r"""(?:
+            \.fill\(\s*(?P<q1>['"])(?P<txt1>[^'"]+)(?P=q1)
+            |
+            getByText\(\s*(?P<q2>['"])(?P<txt2>[^'"]+)(?P=q2)
+            |
+            getByTitle\(\s*(?P<q3>['"])(?P<txt3>[^'"]+)(?P=q3)
+            |
+            hasText\s*:\s*(?:
+                (?P<q4>['"])(?P<txt4>[^'"]+)(?P=q4)
+                |
+                /(?P<txt5>[^/]+)/[a-z]*
+            )
+            |
+            getByRole\(\s*['"][a-zA-Z]+['"]\s*,\s*\{\s*name:\s*
+              (?P<q6>['"])(?P<txt6>[^'"]+)(?P=q6)
+        )""",
+        re.VERBOSE,
+    )
+
+    # 【表格复选框识别】链式 CSS 含 ant 表格选择列关键 class
+    # codegen 录 checkbox 点击时几乎必带 .ant-checkbox-inner 或 .ant-checkbox-wrapper
+    # 且路径里含 .ant-table-row 或 .ant-table-selection-column 才能确认是"表格行内"复选框
+    # （避免误改表单里的独立 checkbox）
+    _TABLE_CHECKBOX_CLICK_PATTERN = re.compile(
+        r"""await\s+page\.locator\(\s*
+            (?P<q>['"`])(?P<sel>[^'"`]*
+                (?:\.ant-table-row|\.ant-table-selection-column)
+                [^'"`]*
+                \.ant-checkbox(?:-inner|-wrapper)?
+                [^'"`]*
+            )(?P=q)
+        \s*\)\.(?:click|check)\(\s*\)\s*;?""",
+        re.VERBOSE,
+    )
+
     @staticmethod
     def _escape_js_regex_literal(s: str) -> str:
         """转义 JS 正则字面量里的元字符。
@@ -707,6 +798,130 @@ class UiRecordingOrchestratorAgent(BaseApiAutomationAgent):
             )
 
         return cls._TEXT_NTH_PATTERN.sub(_replace, content)
+
+    @classmethod
+    def _rewrite_copy_timestamp_pattern(cls, content: str) -> str:
+        """把 codegen 录到的 name 带时间戳的 getByRole 精确匹配改写为 hasText 包含匹配。
+
+        Why:
+          业务里"复制"一份资源时，默认命名通常是 `<原名>_copy_YYYYMMDDHHMMSS`，
+          codegen 录制时 name 会带上这个时间戳，name 后面往往还跟着 IP/主机名/编号等动态内容。
+          精确 name 匹配 → 下次运行时间戳不同 → 定位失败超时。
+
+          规则：提取到 `_copy_` 为止的稳定前缀，改写为 `hasText` 包含匹配 + `.first()` 兜底
+          多行同名场景。
+
+        改写示例：
+            getByRole('row', { name: '策略中心-进程白名单_copy_20260701104912 5 默认 ...' })
+              → getByRole('row').filter({ hasText: '策略中心-进程白名单_copy_' }).first()
+        """
+
+        def _replace(m: re.Match) -> str:
+            role = m.group("role")
+            stable_prefix = m.group("prefix")
+            # JS 单引号字符串转义（原文里出现的 \ 和 ' 都要处理，
+            # 中文/常见符号不受影响，防止 prefix 里出现 ' 破坏语法）
+            escaped = stable_prefix.replace("\\", "\\\\").replace("'", "\\'")
+            return f"getByRole('{role}').filter({{ hasText: '{escaped}' }}).first()"
+
+        return cls._COPY_TIMESTAMP_NAME_PATTERN.sub(_replace, content)
+
+    @classmethod
+    def _rewrite_search_click_to_press_enter(cls, content: str) -> str:
+        """把搜索按钮的 click 改写为最近一次 fill 定位到的输入框上的 press('Enter')。
+
+        Why:
+          codegen 默认录 `fill(...)` + `getByRole('button', { name: '搜索' }).click()`，
+          但 ant-design 搜索按钮的 click 在数据量大 / 网络慢时经常超时（disabled 态、加载 spinner 覆盖等）。
+          业务侧统一约定 —— 搜索/筛选一律用回车提交，等价语义 + 更稳。
+          相关约定：feedback_search_prefer_enter
+
+        改写策略：
+          - 逐行扫描
+          - 遇到 `await <SEL>.fill(...)` 记住 <SEL>
+          - 遇到"搜索按钮 click"行 → 改写为 `await <记忆的 SEL>.press('Enter')`
+          - 没有找到前置 fill 的 → 保留原样（避免误改）
+
+        识别范围（`_SEARCH_BUTTON_CLICK_PATTERN`）：
+          - `getByRole('button', { name: '搜索'|'查询'|'检索'|'Search' })`
+          - `.ant-input-search-button` / `.search-btn`
+
+        为什么不涉及 getByText('搜索')？
+          - 页面里 "搜索" 二字可能是菜单/图标 tooltip/占位文字，误伤面大
+          - 如果 codegen 录出这种，交给 LLM prompt 里的优先级 2.5 铁律去改
+        """
+        lines = content.splitlines(keepends=True)
+        last_fill_selector: Optional[str] = None
+        for i, line in enumerate(lines):
+            fill_match = cls._FILL_SELECTOR_PATTERN.search(line)
+            if fill_match:
+                last_fill_selector = fill_match.group("sel").strip()
+                continue
+
+            if cls._SEARCH_BUTTON_CLICK_PATTERN.search(line) and last_fill_selector:
+                indent_match = re.match(r"^\s*", line)
+                indent = indent_match.group() if indent_match else ""
+                # 保留原行末尾的换行符
+                newline = "\n" if line.endswith("\n") else ""
+                lines[i] = f"{indent}await {last_fill_selector}.press('Enter');{newline}"
+
+        return "".join(lines)
+
+    @classmethod
+    def _rewrite_table_checkbox_to_xpath(cls, content: str) -> str:
+        """把 ant-table 行内复选框的深层 CSS 定位改写为业务文案的 xpath 定位。
+
+        Why:
+          codegen 录制表格勾选时会产出类似：
+            page.locator('.ant-table-row.GreyRowColor > .ant-table-cell.ant-table-selection-column
+                         > .ant-checkbox-wrapper > .ant-checkbox > .ant-checkbox-inner').click()
+          这种链式 CSS 有两个致命问题：
+            1. 含状态 class（`.GreyRowColor` / hover 类），行状态一变就命中不到
+            2. 不含业务信息，跨环境/数据变化必翻车
+
+          业务侧稳定写法是"用行内业务文案锚定，找该行的复选框"：
+            page.locator("xpath=//tr[.//text()[contains(., '业务名')]]//input[@type='checkbox']").check()
+
+        改写策略（逐行扫描 + 上下文回溯）：
+          - 记忆最近的业务文案（来自 fill/getByText/hasText/getByRole name）
+          - 匹配到表格 checkbox click 时，用最近记忆的业务文案组装 xpath
+          - **找不到业务文案 → 保留原样**（不做启发式猜测，避免误改）
+          - .click() 和 .check() 都改写为 .check()（复选框语义更明确）
+        """
+        lines = content.splitlines(keepends=True)
+        last_biz_text: Optional[str] = None
+
+        for i, line in enumerate(lines):
+            # 先尝试识别为表格 checkbox click（可能这一行既是 click 又提到文本，先判 click）
+            table_match = cls._TABLE_CHECKBOX_CLICK_PATTERN.search(line)
+            if table_match and last_biz_text:
+                indent_match = re.match(r"^\s*", line)
+                indent = indent_match.group() if indent_match else ""
+                newline = "\n" if line.endswith("\n") else ""
+
+                # 组装 xpath：转义单引号（业务文案里出现 ' 概率极低，兜底处理）
+                escaped_text = last_biz_text.replace("\\", "\\\\").replace("'", "\\'")
+                # 用双引号包 JS 字符串，xpath 内层用单引号，避免转义混乱
+                xpath = (
+                    f"xpath=//tr[.//text()[contains(., '{escaped_text}')]]"
+                    f"//input[@type=\"checkbox\"]"
+                )
+                lines[i] = (
+                    f"{indent}await page.locator(\"{xpath}\").check();{newline}"
+                )
+                continue
+
+            # 非 click 行，尝试记忆业务文案
+            biz_match = cls._BIZ_TEXT_CAPTURE_PATTERN.search(line)
+            if biz_match:
+                # 取第一个非空的捕获组作为业务文案
+                for key in ("txt1", "txt2", "txt3", "txt4", "txt5", "txt6"):
+                    val = biz_match.group(key)
+                    if val:
+                        last_biz_text = val.strip()
+                        break
+
+        return "".join(lines)
 
     # 检测 test 体内是否已经存在 expect(...) 调用
     # 注释里出现 "expect" 字样不算 —— 我们要求真实调用,所以匹配带 `(` 的形态
@@ -816,6 +1031,15 @@ class UiRecordingOrchestratorAgent(BaseApiAutomationAgent):
 
         # 兜底 4:fallback 路径也要净化 getByText().nth(N) anti-pattern
         body_text = UiRecordingOrchestratorAgent._rewrite_text_nth_anti_pattern(body_text)
+
+        # 兜底 4.5:fallback 路径同样识别 copy 时间戳并改写为 hasText 匹配
+        body_text = UiRecordingOrchestratorAgent._rewrite_copy_timestamp_pattern(body_text)
+
+        # 兜底 4.6:fallback 路径同样处理搜索按钮 click → press('Enter')
+        body_text = UiRecordingOrchestratorAgent._rewrite_search_click_to_press_enter(body_text)
+
+        # 兜底 4.7:fallback 路径同样把表格 checkbox 深层 CSS → xpath 业务定位
+        body_text = UiRecordingOrchestratorAgent._rewrite_table_checkbox_to_xpath(body_text)
 
         # 兜底 5:fallback 路径同样必须保证有 expect 断言(LLM 都失败了,原始 codegen 更不可能带)
         body_text = UiRecordingOrchestratorAgent._ensure_trailing_assertion(body_text)

@@ -65,21 +65,23 @@ async def heal_dangling_recordings() -> int:
         return 0
 
     try:
+        # idle 也纳入自愈范围：会话已创建但从未触发（SSE 未连上/daemon 未启动），
+        # 后端重启后如果不清理，前端列表会一直显示"空闲"僵尸
         dangling_qs = UiRecordingSession.filter(
-            status__in=["launching", "recording", "postprocessing"]
+            status__in=["idle", "launching", "recording", "postprocessing"]
         )
         ids = [row.session_id for row in await dangling_qs.only("session_id").all()]
         if not ids:
             return 0
 
-        now = datetime.now()
+        # 注意：UiRecordingSession 模型没有 end_time 字段（只有 duration_ms），不写 end_time
+        # 用 cancelled 状态（模型描述的合法状态之一），跟用户手工取消语义对齐
         affected = await UiRecordingSession.filter(session_id__in=ids).update(
-            status="interrupted",
-            end_time=now,
-            error_message="后端重启时检测到未完结录制,自动标记为 interrupted",
+            status="cancelled",
+            error_message="后端重启时检测到未完结录制,自动标记为 cancelled",
         )
         logger.info(
-            f"UI 录制自愈完成: {affected} 条 launching/recording/postprocessing 记录改为 interrupted"
+            f"UI 录制自愈完成: {affected} 条 idle/launching/recording/postprocessing 记录改为 cancelled"
         )
         return affected
     except Exception as e:

@@ -384,25 +384,29 @@ async def cancel_recording(session_id: str):
     # 尝试杀本地 codegen 子进程（可能已死/远程录制/后端重启后进程不在）
     proc_cancelled = await codegen_runner.cancel_codegen(session_id)
 
-    # 无论子进程是否找到，只要当前状态是"运行中"（launching/recording/postprocessing），
-    # 都强制把 DB 状态改为 cancelled，避免僵尸卡住列表
-    running_states = ("launching", "recording", "postprocessing")
+    # 所有"未终态"都视为可取消：idle（刚创建还没触发）/ launching / recording / postprocessing
+    # 只要不是 ready/failed/cancelled/interrupted/timeout 这类终态，用户点取消都强制标 cancelled
+    cancellable_states = ("idle", "launching", "recording", "postprocessing")
     db_updated = False
-    if row.status in running_states:
-        from datetime import datetime as _dt
+    if row.status in cancellable_states:
         await UiRecordingSession.filter(session_id=session_id).update(
             status="cancelled",
-            end_time=_dt.now(),
-            error_message="用户手动取消" if proc_cancelled else "用户取消（子进程已不存在，直接标终态）",
+            error_message=(
+                "用户手动取消"
+                if proc_cancelled
+                else "用户取消（子进程未启动或已不存在，直接标终态）"
+            ),
         )
         db_updated = True
 
-    if proc_cancelled:
-        msg = "已发送取消信号"
+    if proc_cancelled and db_updated:
+        msg = "已取消（子进程已终止 + DB 状态已更新）"
     elif db_updated:
-        msg = "子进程不存在，已直接标记为已取消"
+        msg = "已取消（子进程未启动或已不存在，DB 状态已更新）"
+    elif proc_cancelled:
+        msg = "已发送取消信号（DB 状态已是终态，无需更新）"
     else:
-        msg = f"当前状态为 {row.status}，无需取消"
+        msg = f"当前状态为 {row.status}，已是终态，无需取消"
 
     return {
         "code": 200,
