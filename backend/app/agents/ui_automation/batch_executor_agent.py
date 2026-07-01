@@ -255,6 +255,23 @@ class UiBatchExecutorAgent(BaseApiAutomationAgent):
                     )
                 except Exception as e:
                     logger.error(f"批次落库投递失败 batch={msg.batch_id}: {e}")
+
+                # 自动生成批次级 Allure 汇总（异步，不阻塞批次完成事件）
+                # UI_AUTO_GENERATE_ALLURE=False 时不触发；等前端按钮
+                if settings.UI_AUTO_GENERATE_ALLURE:
+                    try:
+                        from app.services.ui_automation.allure_service import (
+                            trigger_batch_generate_task,
+                        )
+                        await trigger_batch_generate_task(
+                            batch_id=msg.batch_id,
+                            batch_name=getattr(msg, "batch_name", "") or "",
+                            execution_ids=list(execution_ids.values()),
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            f"[batch {msg.batch_id}] 触发 Allure 批次自动生成失败（不影响主流程）: {e}"
+                        )
                 break
 
         self._batch_cancel_flags.pop(msg.batch_id, None)

@@ -133,6 +133,10 @@ class Settings(BaseSettings):
     UI_ARTIFACT_RETENTION_DAYS: int = 7
     UI_KEEP_LATEST_SUCCESS_REPORTS: int = 20
 
+    # UI 自动化 Allure 报告：True=执行结束后异步自动生成（默认）；False=仅前端按钮触发。
+    # 自动生成不阻塞执行完成事件，前端进详情看到 generating 状态会自动轮询。
+    UI_AUTO_GENERATE_ALLURE: bool = True
+
     # MidScene.js 在子进程内通过 OPENAI_* / MIDSCENE_MODEL_NAME 读取 LLM 配置。
     # 这里允许在 .env 单独配 UI_MIDSCENE_*；若留空,execution_service 会回退到 DOUBAO_*。
     UI_MIDSCENE_API_KEY: str = ""

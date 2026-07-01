@@ -32,6 +32,18 @@ export default defineConfig({
         outputFile: process.env.PW_JSON_REPORT_FILE || "./reports/results.json",
       },
     ],
+    // Allure 原始事件流：每次执行都写，不调 generate；
+    // 由后端 allure_service 在用户按钮触发时按需聚合成 HTML 报告
+    // 兼容 allure-playwright 2.x (outputFolder) 和 3.x (resultsDir) 两种参数名
+    [
+      "allure-playwright",
+      {
+        resultsDir: process.env.PW_ALLURE_RESULTS_DIR || "./reports/allure-results",
+        outputFolder: process.env.PW_ALLURE_RESULTS_DIR || "./reports/allure-results",
+        suiteTitle: false,
+        detail: true,
+      },
+    ],
   ],
 
   use: {

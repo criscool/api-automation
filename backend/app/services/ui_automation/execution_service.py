@@ -122,9 +122,13 @@ def _prepare_workspace(execution_id: str) -> Dict[str, str]:
     html_dir = workspace / "html"
     json_file = workspace / "results.json"
     log_file = workspace / "run.log"
+    # allure-results: Playwright 跑测试时通过 allure-playwright reporter 写入；
+    # allure HTML 由 allure_service 按需 generate（按钮触发），不在此预建
+    allure_results_dir = workspace / "allure-results"
 
     test_results.mkdir(parents=True, exist_ok=True)
     html_dir.mkdir(parents=True, exist_ok=True)
+    allure_results_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         workspace_relative = workspace.relative_to(artifact_root)
@@ -138,6 +142,7 @@ def _prepare_workspace(execution_id: str) -> Dict[str, str]:
         "html_report_dir": str(html_dir),
         "json_report_file": str(json_file),
         "log_file": str(log_file),
+        "allure_results_dir": str(allure_results_dir),
         "workspace_relative": workspace_relative_str,
         "safe_id": safe,
     }
@@ -263,6 +268,8 @@ def _build_env(workspace_paths: Dict[str, str], extra_env: Optional[Dict[str, st
     env["PW_OUTPUT_DIR"] = workspace_paths["test_results_dir"]
     env["PW_HTML_REPORT_DIR"] = workspace_paths["html_report_dir"]
     env["PW_JSON_REPORT_FILE"] = workspace_paths["json_report_file"]
+    # allure-playwright reporter 写入目录（每次执行都写，后端按需 generate 用）
+    env["PW_ALLURE_RESULTS_DIR"] = workspace_paths["allure_results_dir"]
     env["UI_HEADLESS"] = "true" if settings.UI_HEADLESS else "false"
 
     # baseURL 兜底:.env 没填就回退到 API 业务 YAML 的 api.base_url

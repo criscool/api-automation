@@ -128,6 +128,16 @@ class UiTestReport(BaseModel, TimestampMixin):
     report_url = fields.CharField(max_length=500, default="", description="报告访问 URL（前端 iframe 加载）")
     report_path = fields.CharField(max_length=500, default="", description="报告文件磁盘路径")
 
+    # Allure 报告字段：按需触发生成（前端按钮）
+    # 状态机：not_generated → generating → ready / failed → generating (重试) → ...
+    allure_report_url = fields.CharField(max_length=500, null=True, description="Allure 报告 URL（按需生成）")
+    allure_status = fields.CharField(
+        max_length=20, default="not_generated",
+        description="not_generated/generating/ready/failed"
+    )
+    allure_generated_at = fields.DatetimeField(null=True, description="最近一次成功生成时间")
+    allure_error = fields.TextField(default="", description="失败原因（截断）")
+
     summary = fields.JSONField(default=dict, description="报告汇总（用例数/通过数/失败数）")
     passed = fields.IntField(default=0)
     failed = fields.IntField(default=0)
@@ -182,6 +192,15 @@ class UiBatchExecution(BaseModel, TimestampMixin):
     # _kickoff_batch_execution 从 DB 读出后还原 UiBatchExecutionInput
     execution_config = fields.JSONField(default=dict, description="批次配置(script_ids/session_id/超时等)")
     error_message = fields.TextField(default="", description="错误信息（简短）")
+
+    # Allure 批次汇总报告字段：按需触发，逻辑同 UiTestReport.allure_*
+    batch_allure_report_url = fields.CharField(max_length=500, null=True, description="批次级 Allure 汇总报告 URL")
+    batch_allure_status = fields.CharField(
+        max_length=20, default="not_generated",
+        description="not_generated/generating/ready/failed"
+    )
+    batch_allure_generated_at = fields.DatetimeField(null=True, description="最近一次成功生成时间")
+    batch_allure_error = fields.TextField(default="", description="失败原因（截断）")
 
     class Meta:
         table = "ui_batch_executions"
@@ -469,3 +488,39 @@ async def _ensure_migration_ui_automation_tables():
                 pass
             else:
                 raise
+
+
+async def _ensure_migration_ui_allure_fields():
+    """免删库增量迁移：UiTestReport / UiBatchExecution 加 Allure 相关字段。
+
+    幂等：每列单独 SELECT 探测，存在则跳过；不存在才 ALTER TABLE ADD COLUMN。
+    """
+    from tortoise import connections
+    conn = connections.get("default")
+
+    migrations = [
+        # ui_test_reports
+        ("ui_test_reports", "allure_report_url",
+         "ALTER TABLE ui_test_reports ADD COLUMN allure_report_url VARCHAR(500)"),
+        ("ui_test_reports", "allure_status",
+         "ALTER TABLE ui_test_reports ADD COLUMN allure_status VARCHAR(20) NOT NULL DEFAULT 'not_generated'"),
+        ("ui_test_reports", "allure_generated_at",
+         "ALTER TABLE ui_test_reports ADD COLUMN allure_generated_at TIMESTAMP"),
+        ("ui_test_reports", "allure_error",
+         "ALTER TABLE ui_test_reports ADD COLUMN allure_error TEXT NOT NULL DEFAULT ''"),
+        # ui_batch_executions
+        ("ui_batch_executions", "batch_allure_report_url",
+         "ALTER TABLE ui_batch_executions ADD COLUMN batch_allure_report_url VARCHAR(500)"),
+        ("ui_batch_executions", "batch_allure_status",
+         "ALTER TABLE ui_batch_executions ADD COLUMN batch_allure_status VARCHAR(20) NOT NULL DEFAULT 'not_generated'"),
+        ("ui_batch_executions", "batch_allure_generated_at",
+         "ALTER TABLE ui_batch_executions ADD COLUMN batch_allure_generated_at TIMESTAMP"),
+        ("ui_batch_executions", "batch_allure_error",
+         "ALTER TABLE ui_batch_executions ADD COLUMN batch_allure_error TEXT NOT NULL DEFAULT ''"),
+    ]
+
+    for table, column, ddl in migrations:
+        try:
+            await conn.execute_query(f"SELECT {column} FROM {table} LIMIT 1")
+        except Exception:
+            await conn.execute_script(ddl)

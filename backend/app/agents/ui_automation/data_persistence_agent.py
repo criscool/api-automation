@@ -202,6 +202,23 @@ class UiDataPersistenceAgent(BaseApiAutomationAgent):
         if not created:
             await UiTestReport.filter(report_id=report_id).update(**defaults)
 
+        # 自动生成 Allure 报告（异步，不阻塞执行完成事件）
+        # UI_AUTO_GENERATE_ALLURE=False 时不触发；等前端按钮
+        if settings.UI_AUTO_GENERATE_ALLURE:
+            try:
+                from app.services.ui_automation.allure_service import (
+                    trigger_single_generate_task,
+                )
+                await trigger_single_generate_task(
+                    execution_id=message.execution_id,
+                    script_id=message.script_id,
+                )
+            except Exception as e:
+                # 自动生成的触发失败不能影响执行完成事件本身
+                logger.warning(
+                    f"[exec {message.execution_id}] 触发 Allure 自动生成失败（不影响主流程）: {e}"
+                )
+
     async def _save_artifacts(self, message: UiExecutionDoneMessage) -> None:
         """批量写 ui_execution_artifacts(先清掉同执行的旧记录,重跑场景幂等)。"""
         if not message.artifacts:

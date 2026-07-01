@@ -21,6 +21,7 @@
   "devDependencies": {
     "@playwright/test": "^1.47.0",
     "@types/node": "^20.11.30",
+    "allure-playwright": "^3.0.0",
     "typescript": "^5.4.5"
   },
   "pnpm": {

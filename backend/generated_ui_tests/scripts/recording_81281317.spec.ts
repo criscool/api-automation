@@ -13,7 +13,7 @@ test("资产管理-资产网段-批量增加-搜索-删除", async ({ page }) =>
   await page.getByRole('combobox', { name: '* 网络位置 :' }).click();
   await page.locator('.ant-select-item-option-content').filter({ hasText: /^内网$/ }).first().click();
   await page.getByRole('combobox', { name: '* 数据集 :' }).click();
-  await page.locator('.ant-select-item-option-content').filter({ hasText: /^docker195$/ }).first().click();
+  await page.locator('.ant-select-item-option-content').filter({ hasText: /^天象数据集$/ }).first().click();
   await page.getByRole('button', { name: '确 定' }).click();
   await page.getByRole('textbox', { name: '请输入网段搜索' }).click();
   await page.getByRole('textbox', { name: '请输入网段搜索' }).fill('13.13.13.1');

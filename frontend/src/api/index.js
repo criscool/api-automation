@@ -230,6 +230,12 @@ export default {
     `/api/v1/ui-automation/executions/${executionId}/events?session_id=${encodeURIComponent(sessionId)}`,
   uiListReports: (params = {}) => request.get('/ui-automation/reports', { params }),
   uiGetReport: (reportId) => request.get(`/ui-automation/reports/${reportId}`),
+  // ---- UI 自动化 - Allure 按需生成（前端按钮触发，异步生成 + 前端轮询）----
+  uiGetAllureCliStatus: () => request.get('/ui-automation/executions/allure/cli-status'),
+  uiTriggerSingleAllure: (executionId) =>
+    request.post(`/ui-automation/executions/${executionId}/allure/generate`),
+  uiTriggerBatchAllure: (batchId) =>
+    request.post(`/ui-automation/executions/batches/${batchId}/allure/generate`),
 
   // ---- UI 自动化 - 图片库(阶段四) ----
   uiUploadLibraryImage: (formData) =>

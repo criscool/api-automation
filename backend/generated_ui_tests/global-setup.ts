@@ -39,12 +39,32 @@ async function globalSetup() {
 
   try {
     await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded" });
-    await page.getByPlaceholder("user name").fill(LOGIN_USER);
-    await page.getByPlaceholder("password").fill(LOGIN_PASS);
-    await page.getByRole("button", { name: "Sign in" }).click();
 
-    // 等登录表单消失
-    await page.getByRole("button", { name: "Sign in" }).waitFor({ state: "hidden", timeout: 15_000 }).catch(() => {});
+    // 兼容中英文登录页：
+    //   - placeholder 可能是 "user name" / "用户名" / "请输入用户名" / "username"
+    //   - 密码同理 "password" / "密码" / "请输入密码"
+    //   - 登录按钮文案可能是 "Sign in" / "登录" / "Login"
+    // 用正则 + .or() 多策略匹配，命中任一即可。
+    const userInput = page
+      .getByPlaceholder(/user\s*name|username|用户名/i)
+      .or(page.getByLabel(/user\s*name|username|用户名/i))
+      .first();
+    const passInput = page
+      .getByPlaceholder(/password|密码/i)
+      .or(page.getByLabel(/password|密码/i))
+      .first();
+    const submitBtn = page
+      .getByRole("button", { name: /sign\s*in|login|登\s*录/i })
+      .first();
+
+    await userInput.fill(LOGIN_USER, { timeout: 15_000 });
+    await passInput.fill(LOGIN_PASS, { timeout: 5_000 });
+    await submitBtn.click({ timeout: 5_000 });
+
+    // 等登录表单消失（任一登录按钮变隐藏即视为登录跳转完成）
+    await submitBtn
+      .waitFor({ state: "hidden", timeout: 15_000 })
+      .catch(() => {});
 
     // 等 token 写入 storage
     await page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => {});

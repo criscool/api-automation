@@ -172,9 +172,20 @@
 
     <!-- ============ 详情抽屉 ============ -->
     <n-drawer v-model:show="detailVisible" :width="880" placement="right">
-      <n-drawer-content :title="detail?.name || '脚本详情'" closable>
+      <n-drawer-content :title="editName || detail?.name || '脚本详情'" closable>
         <n-spin :show="detailLoading">
           <n-space v-if="detail" vertical size="large">
+            <!-- 用例名称编辑（脚本管理列表里展示的名字，同步写 DB.name） -->
+            <n-card embedded title="用例名称" size="small">
+              <n-input
+                v-model:value="editName"
+                placeholder="给这个脚本起个易记的名字（列表展示用）"
+                :maxlength="200"
+                show-count
+                clearable
+              />
+            </n-card>
+
             <n-descriptions :column="2" bordered label-placement="left" size="small">
               <n-descriptions-item label="script_id">{{ detail.script_id }}</n-descriptions-item>
               <n-descriptions-item label="类型">
@@ -545,6 +556,7 @@ const detailVisible = ref(false)
 const detail = ref(null)
 const detailLoading = ref(false)
 const editContent = ref('')
+const editName = ref('')
 const savingContent = ref(false)
 
 async function openDetail(scriptId) {
@@ -552,10 +564,12 @@ async function openDetail(scriptId) {
   detailLoading.value = true
   detail.value = null
   editContent.value = ''
+  editName.value = ''
   try {
     const res = await api.uiGetScript(scriptId)
     detail.value = res?.data ?? res
     editContent.value = detail.value?.content || ''
+    editName.value = detail.value?.name || ''
   } catch (e) {
     window.$message?.error('加载失败：' + (e?.message || e))
   } finally {
@@ -573,13 +587,31 @@ function copyContent() {
 
 async function saveContent() {
   if (!detail.value) return
+  const trimmedName = (editName.value || '').trim()
+  if (!trimmedName) {
+    window.$message?.warning('用例名称不能为空')
+    return
+  }
+  if (!editContent.value || !editContent.value.trim()) {
+    window.$message?.warning('脚本内容不能为空')
+    return
+  }
   savingContent.value = true
   try {
-    await api.uiUpdateScript(detail.value.script_id, { content: editContent.value })
-    window.$message?.success('已保存')
+    // 后端 PUT /scripts/{id} 同时支持 name + content 更新（会同步写磁盘）
+    await api.uiUpdateScript(detail.value.script_id, {
+      name: trimmedName,
+      content: editContent.value,
+    })
+    // 本地也刷新一下，避免用户看不到更新
+    if (detail.value) {
+      detail.value.name = trimmedName
+      detail.value.content = editContent.value
+    }
+    window.$message?.success('已保存（DB + 磁盘已同步）')
     loadList()
   } catch (e) {
-    window.$message?.error('保存失败：' + (e?.message || e))
+    window.$message?.error('保存失败：' + (e?.response?.data?.detail || e?.message || e))
   } finally {
     savingContent.value = false
   }

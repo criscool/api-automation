@@ -50,6 +50,10 @@ async def lifespan(app: FastAPI):
     from app.models.api_automation import _ensure_migration_test_script_heal_fields
     await _ensure_migration_test_script_heal_fields()
 
+    # UI 自动化 Allure 报告相关字段（按需生成方案）
+    from app.models.ui_automation import _ensure_migration_ui_allure_fields
+    await _ensure_migration_ui_allure_fields()
+
     # UI 自动化模块（一期）—— 仅在 UI_AUTOMATION_ENABLED=True 时建表 + 注册菜单
     if settings.UI_AUTOMATION_ENABLED:
         from app.models.ui_automation import _ensure_migration_ui_automation_tables
@@ -69,6 +73,37 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             from loguru import logger
             logger.error(f"UI 执行自愈失败: {e}")
+
+        # Allure 报告自愈：把僵尸的 generating 状态重置为 failed，避免前端轮询永远不结束
+        try:
+            from app.api.v1.endpoints.ui_automation.executions import reset_zombie_allure_status
+            n = await asyncio.wait_for(reset_zombie_allure_status(), timeout=5)
+            if n > 0:
+                from loguru import logger
+                logger.info(f"Allure 僵尸状态重置: {n} 条")
+        except asyncio.TimeoutError:
+            from loguru import logger
+            logger.warning("Allure 自愈超时,跳过")
+        except Exception as e:
+            from loguru import logger
+            logger.error(f"Allure 自愈失败: {e}")
+
+        # Allure history retention 后台循环：每 24h 清理过期 history 目录
+        async def _allure_history_cleanup_loop():
+            from loguru import logger
+            from app.services.ui_automation.allure_service import cleanup_old_history
+            # 启动后先等 5 分钟，避开启动期资源争抢
+            await asyncio.sleep(300)
+            while True:
+                try:
+                    n = await cleanup_old_history(retention_days=30)
+                    if n > 0:
+                        logger.info(f"Allure history retention 清理: {n} 个目录")
+                except Exception as e:
+                    logger.warning(f"Allure history retention 异常: {e}")
+                await asyncio.sleep(24 * 3600)
+
+        asyncio.create_task(_allure_history_cleanup_loop())
 
     # 初始化API自动化编排器
     try:

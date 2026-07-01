@@ -12,7 +12,7 @@
           <n-space>
             <n-input
               v-model:value="filter.script_id"
-              placeholder="按 script_id 过滤"
+              placeholder="按脚本 ID 过滤"
               clearable
               style="width: 240px"
               @keyup.enter="loadList"
@@ -73,8 +73,8 @@
         <n-spin :show="detailLoading">
           <n-space v-if="detail" vertical size="large">
             <n-descriptions :column="2" bordered label-placement="left" size="small">
-              <n-descriptions-item label="execution_id">{{ detail.execution_id }}</n-descriptions-item>
-              <n-descriptions-item label="script_id">{{ detail.script_id }}</n-descriptions-item>
+              <n-descriptions-item label="执行ID">{{ detail.execution_id }}</n-descriptions-item>
+              <n-descriptions-item label="用例名称">{{ detail.script_name || detail.script_id }}</n-descriptions-item>
               <n-descriptions-item label="状态">
                 <n-tag :type="statusToType(detail.status)" size="small">{{ detail.status }}</n-tag>
               </n-descriptions-item>
@@ -105,23 +105,98 @@
               </div>
             </n-card>
 
-            <!-- 报告 iframe -->
-            <n-card v-if="detail.report?.report_url" size="small" title="Playwright 报告">
+            <!-- 报告区：Tab 切换 Playwright(默认) / Allure(按需生成) -->
+            <n-card v-if="detail.report" size="small" title="测试报告">
               <template #header-extra>
                 <n-space size="small">
                   <n-tag size="small" type="success">通过 {{ detail.report.passed }}</n-tag>
                   <n-tag size="small" type="error">失败 {{ detail.report.failed }}</n-tag>
                   <n-tag size="small">跳过 {{ detail.report.skipped }}</n-tag>
-                  <n-button size="tiny" tag="a" :href="detail.report.report_url" target="_blank">
-                    新标签页打开
-                  </n-button>
                 </n-space>
               </template>
-              <iframe
-                :src="detail.report.report_url"
-                class="report-frame"
-                sandbox="allow-scripts allow-same-origin"
-              />
+
+              <n-tabs v-model:value="reportTab" type="line" animated>
+                <!-- Playwright 原生（默认 Tab）-->
+                <n-tab-pane name="playwright" tab="Playwright 详情">
+                  <div v-if="detail.report.report_url">
+                    <n-space size="small" style="margin-bottom: 8px;">
+                      <n-button size="tiny" tag="a" :href="detail.report.report_url" target="_blank">
+                        新标签页打开
+                      </n-button>
+                    </n-space>
+                    <iframe
+                      :src="detail.report.report_url"
+                      class="report-frame"
+                      sandbox="allow-scripts allow-same-origin"
+                    />
+                  </div>
+                  <n-empty v-else description="未生成 Playwright 报告" />
+                </n-tab-pane>
+
+                <!-- Allure（按需生成）-->
+                <n-tab-pane name="allure" tab="Allure">
+                  <!-- ready：显示报告 + 新标签页按钮 -->
+                  <template v-if="detail.report.allure_status === 'ready' && detail.report.allure_report_url">
+                    <n-space size="small" style="margin-bottom: 8px;">
+                      <n-button size="tiny" tag="a" :href="detail.report.allure_report_url" target="_blank">
+                        新标签页打开
+                      </n-button>
+                      <n-button size="tiny" :loading="allureTriggering" @click="triggerSingleAllure">
+                        重新生成
+                      </n-button>
+                      <n-text v-if="detail.report.allure_generated_at" depth="3" style="font-size: 12px;">
+                        生成于 {{ detail.report.allure_generated_at }}
+                      </n-text>
+                    </n-space>
+                    <iframe
+                      :src="detail.report.allure_report_url"
+                      class="report-frame"
+                      sandbox="allow-scripts allow-same-origin"
+                    />
+                  </template>
+
+                  <!-- generating：转圈 -->
+                  <div v-else-if="detail.report.allure_status === 'generating'" class="allure-empty">
+                    <n-spin size="medium" />
+                    <n-text depth="3" style="margin-top: 12px;">
+                      Allure 报告生成中（最长 3 分钟）…
+                    </n-text>
+                  </div>
+
+                  <!-- failed：错误 + 重试 -->
+                  <div v-else-if="detail.report.allure_status === 'failed'" class="allure-empty">
+                    <n-alert type="error" :show-icon="false" style="margin-bottom: 12px; max-width: 480px;">
+                      生成失败：{{ detail.report.allure_error || '未知错误' }}
+                    </n-alert>
+                    <n-button
+                      type="primary"
+                      :loading="allureTriggering"
+                      :disabled="!allureCliAvailable"
+                      @click="triggerSingleAllure"
+                    >
+                      重试
+                    </n-button>
+                  </div>
+
+                  <!-- not_generated（初始状态）：按钮触发 -->
+                  <div v-else class="allure-empty">
+                    <n-text depth="3" style="margin-bottom: 12px;">
+                      尚未生成 Allure 报告（提供历史趋势、失败聚合、业务分类视图）
+                    </n-text>
+                    <n-button
+                      type="primary"
+                      :loading="allureTriggering"
+                      :disabled="!allureCliAvailable"
+                      @click="triggerSingleAllure"
+                    >
+                      生成 Allure 报告
+                    </n-button>
+                    <n-text v-if="!allureCliAvailable" depth="3" style="font-size: 12px; margin-top: 8px;">
+                      服务器未安装 Allure CLI
+                    </n-text>
+                  </div>
+                </n-tab-pane>
+              </n-tabs>
             </n-card>
 
             <!-- 产物列表 -->
@@ -191,6 +266,70 @@
               <n-descriptions-item label="开始时间">{{ batchDetail.start_time || '-' }}</n-descriptions-item>
             </n-descriptions>
 
+            <!-- 批次级 Allure 汇总报告（按需生成）-->
+            <n-card size="small" title="批次汇总报告（Allure）">
+              <!-- ready：嵌入 iframe -->
+              <template v-if="batchDetail.batch_allure_status === 'ready' && batchDetail.batch_allure_report_url">
+                <n-space size="small" style="margin-bottom: 8px;">
+                  <n-button size="tiny" tag="a" :href="batchDetail.batch_allure_report_url" target="_blank">
+                    新标签页打开
+                  </n-button>
+                  <n-button size="tiny" :loading="batchAllureTriggering" @click="triggerBatchAllure">
+                    重新生成
+                  </n-button>
+                  <n-text v-if="batchDetail.batch_allure_generated_at" depth="3" style="font-size: 12px;">
+                    生成于 {{ batchDetail.batch_allure_generated_at }}
+                  </n-text>
+                </n-space>
+                <iframe
+                  :src="batchDetail.batch_allure_report_url"
+                  class="report-frame"
+                  sandbox="allow-scripts allow-same-origin"
+                />
+              </template>
+
+              <!-- generating -->
+              <div v-else-if="batchDetail.batch_allure_status === 'generating'" class="allure-empty">
+                <n-spin size="medium" />
+                <n-text depth="3" style="margin-top: 12px;">
+                  批次汇总报告生成中（最长 3 分钟）…
+                </n-text>
+              </div>
+
+              <!-- failed -->
+              <div v-else-if="batchDetail.batch_allure_status === 'failed'" class="allure-empty">
+                <n-alert type="error" :show-icon="false" style="margin-bottom: 12px; max-width: 480px;">
+                  生成失败：{{ batchDetail.batch_allure_error || '未知错误' }}
+                </n-alert>
+                <n-button
+                  type="primary"
+                  :loading="batchAllureTriggering"
+                  :disabled="!allureCliAvailable"
+                  @click="triggerBatchAllure"
+                >
+                  重试
+                </n-button>
+              </div>
+
+              <!-- not_generated -->
+              <div v-else class="allure-empty">
+                <n-text depth="3" style="margin-bottom: 12px;">
+                  尚未生成。点下方按钮一站式查看 {{ batchDetail.total_scripts || 0 }} 个脚本的合并报告。
+                </n-text>
+                <n-button
+                  type="primary"
+                  :loading="batchAllureTriggering"
+                  :disabled="!allureCliAvailable"
+                  @click="triggerBatchAllure"
+                >
+                  生成批次汇总
+                </n-button>
+                <n-text v-if="!allureCliAvailable" depth="3" style="font-size: 12px; margin-top: 8px;">
+                  服务器未安装 Allure CLI
+                </n-text>
+              </div>
+            </n-card>
+
             <!-- 子执行列表 -->
             <n-card size="small" title="脚本执行明细">
               <n-data-table
@@ -254,8 +393,9 @@ const filter = ref({ script_id: '', status: null })
 const pagination = ref({ page: 1, pageSize: 10, itemCount: 0, showSizePicker: false })
 
 const columns = [
-  { title: 'execution_id', key: 'execution_id', width: 220, ellipsis: { tooltip: true } },
-  { title: 'script_id', key: 'script_id', width: 200, ellipsis: { tooltip: true } },
+  { title: '执行ID', key: 'execution_id', width: 220, ellipsis: { tooltip: true } },
+  { title: '用例名称', key: 'script_name', width: 220, ellipsis: { tooltip: true },
+    render: (row) => row.script_name || row.script_id || '-' },
   {
     title: '状态',
     key: 'status',
@@ -369,9 +509,14 @@ function onViewChange(mode) {
 async function openBatchDetail(batchId) {
   detailLoading.value = true
   batchDetailVisible.value = true
+  if (batchAllurePollTimer) { clearInterval(batchAllurePollTimer); batchAllurePollTimer = null }
   try {
     const res = await api.uiGetBatch(batchId)
     batchDetail.value = res?.data ?? res
+    // 上次离开时还在 generating，继续轮询
+    if (batchDetail.value?.batch_allure_status === 'generating') {
+      startBatchAllurePoll()
+    }
   } catch (e) {
     window.$message?.error('加载失败：' + (e?.message || e))
   } finally {
@@ -380,7 +525,8 @@ async function openBatchDetail(batchId) {
 }
 
 const batchExecColumns = [
-  { title: '脚本ID', key: 'script_id', width: 200, ellipsis: { tooltip: true } },
+  { title: '用例名称', key: 'script_name', width: 220, ellipsis: { tooltip: true },
+    render: (row) => row.script_name || row.script_id || '-' },
   {
     title: '状态',
     key: 'status',
@@ -542,12 +688,125 @@ let sse = null
 let detailRefreshTimer = null
 let batchPollTimer = null
 
+// ----------------------------------------------------------------------------
+// Allure 按需生成（单脚本 + 批次）
+// ----------------------------------------------------------------------------
+const reportTab = ref('playwright')               // 'playwright' | 'allure'
+const allureCliAvailable = ref(true)              // 进页面查一次，决定按钮 disabled
+const allureTriggering = ref(false)               // 单脚本「触发中」loading
+const batchAllureTriggering = ref(false)          // 批次「触发中」loading
+let allurePollTimer = null                        // 单脚本 status 轮询
+let batchAllurePollTimer = null                   // 批次 status 轮询
+
+async function fetchAllureCliStatus() {
+  try {
+    const res = await api.uiGetAllureCliStatus()
+    const data = res?.data ?? res
+    allureCliAvailable.value = !!data?.available
+  } catch {
+    allureCliAvailable.value = false
+  }
+}
+
+async function triggerSingleAllure() {
+  if (!detail.value?.execution_id) return
+  allureTriggering.value = true
+  try {
+    await api.uiTriggerSingleAllure(detail.value.execution_id)
+    // 立即把本地状态改成 generating，UI 同步刷新
+    if (detail.value.report) {
+      detail.value.report.allure_status = 'generating'
+      detail.value.report.allure_error = ''
+    }
+    startAllurePoll()
+  } catch (e) {
+    window.$message?.error('触发失败：' + (e?.response?.data?.detail || e?.message || e))
+  } finally {
+    allureTriggering.value = false
+  }
+}
+
+function startAllurePoll() {
+  if (allurePollTimer) clearInterval(allurePollTimer)
+  allurePollTimer = setInterval(async () => {
+    if (!detail.value?.execution_id) {
+      clearInterval(allurePollTimer)
+      allurePollTimer = null
+      return
+    }
+    try {
+      const res = await api.uiGetExecution(detail.value.execution_id)
+      const data = res?.data ?? res
+      if (data?.report) {
+        // 只更新 allure 相关字段，避免覆盖其他正在变化的字段
+        detail.value.report.allure_status = data.report.allure_status
+        detail.value.report.allure_report_url = data.report.allure_report_url
+        detail.value.report.allure_generated_at = data.report.allure_generated_at
+        detail.value.report.allure_error = data.report.allure_error
+        if (data.report.allure_status === 'ready' || data.report.allure_status === 'failed') {
+          clearInterval(allurePollTimer)
+          allurePollTimer = null
+          if (data.report.allure_status === 'ready') {
+            reportTab.value = 'allure'   // 成功后自动切到 Allure Tab 展示
+          }
+        }
+      }
+    } catch {
+      // 网络抖动忽略，下次轮询会重试
+    }
+  }, 3000)
+}
+
+async function triggerBatchAllure() {
+  if (!batchDetail.value?.batch_id) return
+  batchAllureTriggering.value = true
+  try {
+    await api.uiTriggerBatchAllure(batchDetail.value.batch_id)
+    batchDetail.value.batch_allure_status = 'generating'
+    batchDetail.value.batch_allure_error = ''
+    startBatchAllurePoll()
+  } catch (e) {
+    window.$message?.error('触发失败：' + (e?.response?.data?.detail || e?.message || e))
+  } finally {
+    batchAllureTriggering.value = false
+  }
+}
+
+function startBatchAllurePoll() {
+  if (batchAllurePollTimer) clearInterval(batchAllurePollTimer)
+  batchAllurePollTimer = setInterval(async () => {
+    if (!batchDetail.value?.batch_id) {
+      clearInterval(batchAllurePollTimer)
+      batchAllurePollTimer = null
+      return
+    }
+    try {
+      const res = await api.uiGetBatch(batchDetail.value.batch_id)
+      const data = res?.data ?? res
+      if (data) {
+        batchDetail.value.batch_allure_status = data.batch_allure_status
+        batchDetail.value.batch_allure_report_url = data.batch_allure_report_url
+        batchDetail.value.batch_allure_generated_at = data.batch_allure_generated_at
+        batchDetail.value.batch_allure_error = data.batch_allure_error
+        if (data.batch_allure_status === 'ready' || data.batch_allure_status === 'failed') {
+          clearInterval(batchAllurePollTimer)
+          batchAllurePollTimer = null
+        }
+      }
+    } catch {
+      // 忽略
+    }
+  }, 3000)
+}
+
 async function openDetail(executionId, sessionId) {
   detailVisible.value = true
   detailLoading.value = true
   detail.value = null
   closeSse()
   liveLogs.value = []
+  reportTab.value = 'playwright'           // 每次打开默认 Playwright Tab
+  if (allurePollTimer) { clearInterval(allurePollTimer); allurePollTimer = null }
   try {
     const res = await api.uiGetExecution(executionId)
     detail.value = res?.data ?? res
@@ -560,6 +819,11 @@ async function openDetail(executionId, sessionId) {
     ) {
       startSse(executionId, sessionId)
       detailRefreshTimer = setInterval(() => refreshDetailQuietly(executionId), 5000)
+    }
+
+    // 如果上次离开时正好处于 generating 状态，继续轮询直到结束
+    if (detail.value?.report?.allure_status === 'generating') {
+      startAllurePoll()
     }
   } catch (e) {
     window.$message?.error('加载失败：' + (e?.message || e))
@@ -648,6 +912,14 @@ watch(detailVisible, (val) => {
 onUnmounted(() => {
   closeSse()
   stopDetailRefresh()
+  if (allurePollTimer) {
+    clearInterval(allurePollTimer)
+    allurePollTimer = null
+  }
+  if (batchAllurePollTimer) {
+    clearInterval(batchAllurePollTimer)
+    batchAllurePollTimer = null
+  }
 })
 
 // ----------------------------------------------------------------------------
@@ -671,6 +943,7 @@ onMounted(() => {
   loadList()
   consumeQuery()
   autoOpenBatchFromQuery()
+  fetchAllureCliStatus()       // 查 Allure CLI 是否可用，决定按钮 disabled
 })
 </script>
 
@@ -701,6 +974,14 @@ onMounted(() => {
   height: 480px;
   border: 1px solid #ddd;
   border-radius: 4px;
+}
+.allure-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 16px;
+  text-align: center;
 }
 .code-area :deep(textarea) {
   font-family: 'Fira Code', 'Cascadia Code', Consolas, monospace;

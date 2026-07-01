@@ -62,6 +62,31 @@ _started_executions: Set[str] = set()
 _kickoff_lock: asyncio.Lock = asyncio.Lock()
 
 
+async def reset_zombie_allure_status() -> int:
+    """启动时把僵尸的 generating 状态重置为 failed。
+
+    场景：后端重启时正好有 Allure 后台任务在跑（asyncio.create_task），
+    任务被中断但 DB 里还显示 generating，导致前端轮询永远不会结束。
+    启动时一次性扫描，把所有 generating → failed。
+
+    Returns:
+        重置的总条数（UiTestReport + UiBatchExecution）。
+    """
+    try:
+        from app.models.ui_automation import UiTestReport, UiBatchExecution
+    except Exception:
+        return 0
+    n1 = await UiTestReport.filter(allure_status="generating").update(
+        allure_status="failed",
+        allure_error="后端重启时该任务未完成（已被自动重置）",
+    )
+    n2 = await UiBatchExecution.filter(batch_allure_status="generating").update(
+        batch_allure_status="failed",
+        batch_allure_error="后端重启时该任务未完成（已被自动重置）",
+    )
+    return (n1 or 0) + (n2 or 0)
+
+
 async def _kickoff_execution(execution_id: str, session_id: str) -> None:
     """SSE 订阅生效后真正投递 Topic。
 
@@ -246,7 +271,7 @@ async def list_executions(
     status: Optional[str] = Query(None, description="按状态过滤"),
 ):
     try:
-        from app.models.ui_automation import UiScriptExecution
+        from app.models.ui_automation import UiScriptExecution, UiTestScript
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
 
@@ -258,12 +283,21 @@ async def list_executions(
 
     total = await qs.count()
     rows = await qs.offset((page - 1) * page_size).limit(page_size)
+
+    # 批量反查 script_id → name（避免 N+1）
+    script_ids = list({row.script_id for row in rows if row.script_id})
+    name_map: Dict[str, str] = {}
+    if script_ids:
+        for s in await UiTestScript.filter(script_id__in=script_ids).only("script_id", "name"):
+            name_map[s.script_id] = s.name
+
     items: List[Dict[str, Any]] = []
     for row in rows:
         items.append(
             {
                 "execution_id": row.execution_id,
                 "script_id": row.script_id,
+                "script_name": name_map.get(row.script_id, "") or row.script_id,
                 "status": row.status,
                 "start_time": row.start_time.isoformat() if row.start_time else None,
                 "end_time": row.end_time.isoformat() if row.end_time else None,
@@ -291,6 +325,7 @@ async def get_execution(execution_id: str):
             UiExecutionArtifact,
             UiScriptExecution,
             UiTestReport,
+            UiTestScript,
         )
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
@@ -302,12 +337,20 @@ async def get_execution(execution_id: str):
     report = await UiTestReport.filter(execution_id=execution_id).first()
     artifacts = await UiExecutionArtifact.filter(execution_id=execution_id).all()
 
+    # 反查用例名（用于前端展示替代 script_id）
+    script_name = ""
+    if row.script_id:
+        s = await UiTestScript.filter(script_id=row.script_id).only("name").first()
+        if s:
+            script_name = s.name
+
     return {
         "code": 200,
         "msg": "OK",
         "data": {
             "execution_id": row.execution_id,
             "script_id": row.script_id,
+            "script_name": script_name or row.script_id,
             "status": row.status,
             "start_time": row.start_time.isoformat() if row.start_time else None,
             "end_time": row.end_time.isoformat() if row.end_time else None,
@@ -328,6 +371,14 @@ async def get_execution(execution_id: str):
                     "passed": report.passed,
                     "failed": report.failed,
                     "skipped": report.skipped,
+                    # Allure 按需生成状态机
+                    "allure_status": report.allure_status,
+                    "allure_report_url": report.allure_report_url,
+                    "allure_generated_at": (
+                        report.allure_generated_at.isoformat()
+                        if report.allure_generated_at else None
+                    ),
+                    "allure_error": report.allure_error,
                 }
                 if report
                 else None
@@ -374,6 +425,103 @@ async def cancel_execution(execution_id: str):
         "msg": "已发送取消信号",
         "data": {"execution_id": execution_id, "cancelled": True},
         "success": True,
+    }
+
+
+# ==================== Allure 报告（按需触发生成）====================
+
+@executions_router.get("/allure/cli-status", summary="检测服务器是否安装 Allure CLI（前端按钮可用性）")
+async def get_allure_cli_status():
+    """前端进入执行详情时先调一次，决定「生成 Allure 报告」按钮 disabled 状态。"""
+    try:
+        from app.services.ui_automation.allure_service import is_allure_cli_available
+    except Exception:
+        return {"code": 200, "success": True, "data": {"available": False}}
+    return {
+        "code": 200,
+        "success": True,
+        "data": {"available": is_allure_cli_available()},
+    }
+
+
+@executions_router.post("/{execution_id}/allure/generate", summary="按需生成单脚本 Allure 报告（异步）")
+async def trigger_single_allure(execution_id: str):
+    """
+    返回时立即写 status=generating；后台 asyncio.create_task 跑实际 generate；
+    前端 3s 轮询 GET /executions/{id} 拿 allure_status 字段。
+    """
+    try:
+        from app.models.ui_automation import UiTestReport
+        from app.services.ui_automation.allure_service import (
+            is_allure_cli_available,
+            trigger_single_generate_task,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"UI 自动化模块未启用: {e}")
+
+    row = await UiTestReport.filter(execution_id=execution_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"执行报告记录不存在: {execution_id}")
+
+    if not is_allure_cli_available():
+        raise HTTPException(status_code=400, detail="服务器未安装 Allure CLI")
+
+    if row.allure_status == "generating":
+        return {
+            "code": 200, "success": True,
+            "msg": "已有生成任务在进行中",
+            "data": {"status": "generating"},
+        }
+
+    await trigger_single_generate_task(execution_id=execution_id, script_id=row.script_id)
+    return {
+        "code": 200, "success": True,
+        "msg": "已触发生成（异步）",
+        "data": {"status": "generating"},
+    }
+
+
+@executions_router.post("/batches/{batch_id}/allure/generate", summary="按需生成批次 Allure 汇总报告（异步）")
+async def trigger_batch_allure(batch_id: str):
+    try:
+        from app.models.ui_automation import UiBatchExecution, UiScriptExecution
+        from app.services.ui_automation.allure_service import (
+            is_allure_cli_available,
+            trigger_batch_generate_task,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"UI 自动化模块未启用: {e}")
+
+    batch = await UiBatchExecution.filter(batch_id=batch_id).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail=f"批次记录不存在: {batch_id}")
+
+    if not is_allure_cli_available():
+        raise HTTPException(status_code=400, detail="服务器未安装 Allure CLI")
+
+    if batch.batch_allure_status == "generating":
+        return {
+            "code": 200, "success": True,
+            "msg": "已有生成任务在进行中",
+            "data": {"status": "generating"},
+        }
+
+    execution_ids = [
+        row.execution_id
+        for row in await UiScriptExecution.filter(batch_id=batch_id).only("execution_id")
+    ]
+    if not execution_ids:
+        raise HTTPException(status_code=400, detail="批次下无子执行记录")
+
+    await trigger_batch_generate_task(
+        batch_id=batch_id,
+        batch_name=batch.name or "",
+        execution_ids=execution_ids,
+    )
+    return {
+        "code": 200, "success": True,
+        "msg": "已触发生成（异步）",
+        "data": {"status": "generating"},
     }
 
 
@@ -670,7 +818,7 @@ async def list_batches(
 @batches_router.get("/{batch_id}", summary="批次详情（含报告汇总）")
 async def get_batch(batch_id: str):
     try:
-        from app.models.ui_automation import UiBatchExecution, UiScriptExecution, UiTestReport
+        from app.models.ui_automation import UiBatchExecution, UiScriptExecution, UiTestReport, UiTestScript
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
 
@@ -679,6 +827,14 @@ async def get_batch(batch_id: str):
         raise HTTPException(status_code=404, detail=f"批次不存在: {batch_id}")
 
     executions = await UiScriptExecution.filter(batch_id=batch_id).all()
+
+    # 批量反查 script_id → name（避免 N+1）
+    sub_script_ids = list({e.script_id for e in executions if e.script_id})
+    sub_name_map: Dict[str, str] = {}
+    if sub_script_ids:
+        for s in await UiTestScript.filter(script_id__in=sub_script_ids).only("script_id", "name"):
+            sub_name_map[s.script_id] = s.name
+
     exec_items = []
     total_passed = 0
     total_failed = 0
@@ -688,6 +844,7 @@ async def get_batch(batch_id: str):
         exec_items.append({
             "execution_id": e.execution_id,
             "script_id": e.script_id,
+            "script_name": sub_name_map.get(e.script_id, "") or e.script_id,
             "status": e.status,
             "start_time": e.start_time.isoformat() if e.start_time else None,
             "end_time": e.end_time.isoformat() if e.end_time else None,
@@ -732,6 +889,14 @@ async def get_batch(batch_id: str):
             "total_skipped": total_skipped,
             "executions": exec_items,
             "created_at": row.created_at.isoformat() if row.created_at else None,
+            # Allure 批次汇总报告状态机（按需生成）
+            "batch_allure_status": row.batch_allure_status,
+            "batch_allure_report_url": row.batch_allure_report_url,
+            "batch_allure_generated_at": (
+                row.batch_allure_generated_at.isoformat()
+                if row.batch_allure_generated_at else None
+            ),
+            "batch_allure_error": row.batch_allure_error,
         },
         "success": True,
     }
