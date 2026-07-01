@@ -65,8 +65,12 @@ async def lifespan(app: FastAPI):
 
         # 阶段三 P3-06:后端重启自愈 —— 把残留 running/pending 标记为 interrupted
         try:
-            from app.services.ui_automation.session_service import heal_dangling_executions
+            from app.services.ui_automation.session_service import (
+                heal_dangling_executions,
+                heal_dangling_recordings,
+            )
             await asyncio.wait_for(heal_dangling_executions(), timeout=5)
+            await asyncio.wait_for(heal_dangling_recordings(), timeout=5)
         except asyncio.TimeoutError:
             from loguru import logger
             logger.warning("UI 执行自愈超时,跳过")

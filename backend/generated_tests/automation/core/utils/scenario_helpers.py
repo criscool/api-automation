@@ -216,7 +216,11 @@ def extract_data_out(
         if not isinstance(spec, dict):
             continue
         raw = resolve_path(response_json, spec.get("path", ""))
-        result[var] = _pick_first(raw) if isinstance(raw, list) else raw
+        val = _pick_first(raw) if isinstance(raw, list) else raw
+        # 无效路径或空对象 → 用 value 字段兜底
+        if (val is None) or (isinstance(val, dict) and not val):
+            val = spec.get("value")
+        result[var] = val
     return result
 
 

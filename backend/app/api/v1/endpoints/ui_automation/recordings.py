@@ -381,19 +381,37 @@ async def cancel_recording(session_id: str):
     if not row:
         raise HTTPException(status_code=404, detail=f"录制会话不存在: {session_id}")
 
-    cancelled = await codegen_runner.cancel_codegen(session_id)
-    if not cancelled:
-        return {
-            "code": 200,
-            "msg": "未找到运行中的 codegen 进程(可能已结束)",
-            "data": {"session_id": session_id, "cancelled": False},
-            "success": True,
-        }
+    # 尝试杀本地 codegen 子进程（可能已死/远程录制/后端重启后进程不在）
+    proc_cancelled = await codegen_runner.cancel_codegen(session_id)
+
+    # 无论子进程是否找到，只要当前状态是"运行中"（launching/recording/postprocessing），
+    # 都强制把 DB 状态改为 cancelled，避免僵尸卡住列表
+    running_states = ("launching", "recording", "postprocessing")
+    db_updated = False
+    if row.status in running_states:
+        from datetime import datetime as _dt
+        await UiRecordingSession.filter(session_id=session_id).update(
+            status="cancelled",
+            end_time=_dt.now(),
+            error_message="用户手动取消" if proc_cancelled else "用户取消（子进程已不存在，直接标终态）",
+        )
+        db_updated = True
+
+    if proc_cancelled:
+        msg = "已发送取消信号"
+    elif db_updated:
+        msg = "子进程不存在，已直接标记为已取消"
+    else:
+        msg = f"当前状态为 {row.status}，无需取消"
 
     return {
         "code": 200,
-        "msg": "已发送取消信号",
-        "data": {"session_id": session_id, "cancelled": True},
+        "msg": msg,
+        "data": {
+            "session_id": session_id,
+            "process_cancelled": proc_cancelled,
+            "db_updated": db_updated,
+        },
         "success": True,
     }
 
