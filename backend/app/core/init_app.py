@@ -359,9 +359,16 @@ async def _ensure_menu_ui_automation():
             "component": "/ui-automation/script-management",
         },
         {
+            "name": "用例管理",
+            "path": "testcase-management",
+            "order": 6,
+            "icon": "mdi:file-tree",
+            "component": "/ui-automation/testcase-management",
+        },
+        {
             "name": "执行报告",
             "path": "execution-reports",
-            "order": 6,
+            "order": 7,
             "icon": "mdi:file-chart",
             "component": "/ui-automation/execution-reports",
         },
@@ -588,7 +595,41 @@ async def init_data():
     await init_superuser()
     await init_menus()
     await _ensure_menu_ui_automation()
+    await _ensure_menu_environment_management()
     await ensure_hidden_api_automation_menus()
     await ensure_new_api_automation_menus()
     await init_apis()
     await init_roles()
+
+
+async def _ensure_menu_environment_management():
+    """幂等：在"系统管理"下补建"环境管理"子菜单。
+
+    - 已存在则不动
+    - 系统管理菜单不存在（异常场景）时跳过
+    """
+    from loguru import logger
+
+    parent = await Menu.filter(name="系统管理", parent_id=0).first()
+    if not parent:
+        logger.warning("未找到'系统管理'父菜单，跳过环境管理菜单挂载")
+        return
+
+    exists = await Menu.filter(
+        parent_id=parent.id, path="environment"
+    ).first()
+    if exists:
+        return
+
+    await Menu.create(
+        menu_type=MenuType.MENU,
+        name="环境管理",
+        path="environment",
+        order=7,
+        parent_id=parent.id,
+        icon="carbon:cloud-services",
+        is_hidden=False,
+        component="/system/environment",
+        keepalive=False,
+    )
+    logger.info("已创建'系统管理 > 环境管理'菜单")

@@ -40,6 +40,14 @@ export default {
   // auditlog
   getAuditLogList: (params = {}) => request.get('/auditlog/list', { params }),
 
+  // 环境管理（API + UI 自动化共用的执行环境）
+  listEnvironments: (params = {}) => request.get('/environments', { params }),
+  createEnvironment: (data = {}) => request.post('/environments', data),
+  updateEnvironment: (envId, data = {}) => request.put(`/environments/${envId}`, data),
+  deleteEnvironment: (envId) => request.delete(`/environments/${envId}`),
+  activateEnvironment: (envId) => request.post(`/environments/${envId}/activate`),
+  deactivateAllEnvironments: () => request.post('/environments/deactivate-all'),
+
   // API自动化相关接口
   // 仪表板统计
   getDashboardStatistics: () => request.get('/api-automation/dashboard/statistics'),
@@ -259,6 +267,8 @@ export default {
     request.delete(`/ui-automation/recordings/${sessionId}`, { params: { purge_raw: purgeRaw } }),
   uiRepolishRecording: (sessionId, data = {}) =>
     request.post(`/ui-automation/recordings/${sessionId}/repolish`, data),
+  uiReRecord: (sessionId) =>
+    request.post(`/ui-automation/recordings/${sessionId}/re-record`),
   // SSE 录制进度流:session_sid 与 path session_id 必须相等
   uiRecordingStreamUrl: (sessionId) =>
     `/api/v1/ui-automation/recordings/${sessionId}/events?session_sid=${encodeURIComponent(sessionId)}`,
@@ -270,4 +280,16 @@ export default {
   uiCancelBatch: (batchId) => request.post(`/ui-automation/batches/${batchId}/cancel`),
   uiBatchEventsUrl: (batchId, sessionId) =>
     `/api/v1/ui-automation/batches/${batchId}/events?session_id=${encodeURIComponent(sessionId)}`,
+
+  // ---- UI 自动化 - 用例分类管理 ----
+  uiGetCategoryTree: (params = {}) => request.get('/ui-automation/categories/tree', { params }),
+  uiCreateCategory: (data = {}) => request.post('/ui-automation/categories', data),
+  uiUpdateCategory: (categoryId, data = {}) => request.put(`/ui-automation/categories/${categoryId}`, data),
+  uiDeleteCategory: (categoryId) => request.delete(`/ui-automation/categories/${categoryId}`),
+  uiAutoExtractCategories: (params = {}) => request.post('/ui-automation/categories/auto-extract', null, { params }),
+  uiAutoClassifyScripts: () => request.post('/ui-automation/categories/auto-classify'),
+
+  // ---- UI 自动化 - 脚本分类操作 ----
+  uiBatchMoveScripts: (data = {}) => request.put('/ui-automation/scripts/batch-move', data),
+  uiMoveScript: (scriptId, data = {}) => request.put(`/ui-automation/scripts/${scriptId}/move`, data),
 }

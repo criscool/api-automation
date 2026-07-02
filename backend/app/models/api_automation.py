@@ -1238,3 +1238,72 @@ async def _ensure_migration_scheduled_tasks():
         await conn.execute_script("""
             ALTER TABLE scheduled_tasks ADD COLUMN selection_mode VARCHAR(20) NOT NULL DEFAULT 'scripts';
         """)
+
+
+# ==================== 执行环境管理 ====================
+
+
+class ExecutionEnvironment(BaseModel, TimestampMixin):
+    """执行环境配置 —— 供 API + UI 自动化共用
+
+    设计要点：
+    - 全表最多 1 条 is_active=True（激活/停用在 service 层保证）
+    - 无激活环境时，后端回退到 .env + YAML（现状不变）
+    - name 字段兼容 pytest --env 参数，取值 test/staging/prod 或自定义
+    - 密码明文存（内网信任 + DB 权限可控，需要加密时后续封 service）
+    """
+    env_id = fields.CharField(max_length=100, unique=True, description="环境ID (uuid)", index=True)
+    name = fields.CharField(max_length=50, description="环境标识（用作 pytest --env 参数值）")
+    label = fields.CharField(max_length=100, description="中文名（如 '测试环境'）")
+
+    # URL 配置 —— API 和 UI 可能同域也可能异域，分开填最灵活
+    api_base_url = fields.CharField(max_length=500, default="", description="API 自动化 base URL")
+    ui_base_url = fields.CharField(max_length=500, default="", description="UI 自动化 base URL")
+    ui_login_url = fields.CharField(max_length=500, default="", description="UI 登录页 URL")
+
+    # 登录凭据 —— API + UI 共用
+    username = fields.CharField(max_length=200, default="", description="登录账号")
+    password = fields.CharField(max_length=500, default="", description="登录密码（明文存，内网信任）")
+
+    is_active = fields.BooleanField(default=False, description="是否为当前激活环境", index=True)
+    notes = fields.TextField(default="", description="备注/说明")
+    created_by = fields.CharField(max_length=100, default="", description="创建人")
+
+    class Meta:
+        table = "execution_environments"
+        table_description = "执行环境配置表"
+        indexes = [
+            ("is_active",),
+            ("name",),
+        ]
+
+
+async def _ensure_migration_execution_environments():
+    """免删库增量迁移：新增 execution_environments 表（幂等）"""
+    from tortoise import connections
+    conn = connections.get("default")
+    try:
+        await conn.execute_query("SELECT 1 FROM execution_environments LIMIT 1")
+    except Exception:
+        await conn.execute_script("""
+            CREATE TABLE IF NOT EXISTS execution_environments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                env_id VARCHAR(100) NOT NULL UNIQUE,
+                name VARCHAR(50) NOT NULL,
+                label VARCHAR(100) NOT NULL,
+                api_base_url VARCHAR(500) NOT NULL DEFAULT '',
+                ui_base_url VARCHAR(500) NOT NULL DEFAULT '',
+                ui_login_url VARCHAR(500) NOT NULL DEFAULT '',
+                username VARCHAR(200) NOT NULL DEFAULT '',
+                password VARCHAR(500) NOT NULL DEFAULT '',
+                is_active INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                created_by VARCHAR(100) NOT NULL DEFAULT '',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_execution_environments_is_active
+                ON execution_environments (is_active);
+            CREATE INDEX IF NOT EXISTS idx_execution_environments_name
+                ON execution_environments (name);
+        """)

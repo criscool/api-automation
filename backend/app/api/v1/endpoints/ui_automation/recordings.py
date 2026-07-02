@@ -420,6 +420,71 @@ async def cancel_recording(session_id: str):
     }
 
 
+@recordings_router.post("/{session_id}/re-record", summary="重新录制（复用名称+URL，脚本覆盖旧版本）")
+async def re_record(session_id: str):
+    """基于已有录制会话重新触发一次录制。
+
+    行为：
+    - 复用同一个 session_id（不新建行）
+    - 复用旧会话的 name / target_url / storage_state_path / metadata（用户填过的配置不用再填）
+    - 保留 final_script_id（关键）→ 持久化时走 UPDATE 分支，覆盖旧 UiTestScript
+    - 状态重置为 idle → 前端连 SSE 触发 kickoff
+    - 旧的 raw_script_path / duration_ms / error_message 清空
+
+    前置条件：session 必须处于终态（ready/failed/timeout/cancelled/interrupted）
+    """
+    if not settings.UI_AUTOMATION_ENABLED:
+        raise HTTPException(status_code=503, detail="UI 自动化模块未启用")
+    if not settings.UI_RECORDING_ENABLED:
+        raise HTTPException(status_code=503, detail="UI 录制功能未启用")
+
+    try:
+        from app.models.ui_automation import UiRecordingSession
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"UI 自动化模块未启用: {e}")
+
+    row = await UiRecordingSession.filter(session_id=session_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"录制会话不存在: {session_id}")
+
+    # 只允许在终态下重录，避免打断正在跑的录制
+    terminal_states = ("ready", "failed", "timeout", "cancelled", "interrupted")
+    if row.status not in terminal_states:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"当前状态 {row.status} 不允许重新录制，"
+                "请先等待录制结束或点取消"
+            ),
+        )
+
+    # 重置状态：清运行时字段，保留 name/target_url/storage_state_path/final_script_id
+    # final_script_id 保留是关键 —— _persist_final_script 会用它 UPDATE 旧脚本
+    await UiRecordingSession.filter(session_id=session_id).update(
+        status="idle",
+        raw_script_path="",
+        duration_ms=0,
+        error_message="",
+    )
+
+    sse_endpoint = (
+        f"/api/v1/ui-automation/recordings/{session_id}/events"
+        f"?session_sid={session_id}"
+    )
+
+    return {
+        "code": 200,
+        "msg": "已重置录制会话，请连接 SSE 端点触发录制",
+        "data": {
+            "session_id": session_id,
+            "name": row.name,
+            "target_url": row.target_url,
+            "sse_endpoint": sse_endpoint,
+        },
+        "success": True,
+    }
+
+
 @recordings_router.post("/{session_id}/repolish", summary="对已录制脚本重新跑 AI 优化")
 async def repolish_recording(session_id: str, req: RepolishRecordingRequest):
     """对一段已经成功录制(raw_script_path 已落地)的会话重跑 LLM 后处理。

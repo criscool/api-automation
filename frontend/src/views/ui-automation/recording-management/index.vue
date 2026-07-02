@@ -212,6 +212,13 @@
               <template #icon><n-icon><Icon icon="mdi:auto-fix" /></n-icon></template>
               重新跑 AI 优化
             </n-button>
+            <n-button v-if="detail && ['ready', 'failed', 'timeout', 'cancelled', 'interrupted'].includes(detail.status)"
+                      type="primary"
+                      :loading="reRecording"
+                      @click="onReRecord(detail)">
+              <template #icon><n-icon><Icon icon="mdi:record-rec" /></n-icon></template>
+              重新录制
+            </n-button>
             <n-button @click="detailVisible = false">关闭</n-button>
           </n-space>
         </template>
@@ -549,6 +556,7 @@ const detailVisible = ref(false)
 const detail = ref(null)
 const repolishing = ref(false)
 const repolishStyle = ref('playwright')
+const reRecording = ref(false)
 
 async function openDetail(sessionId) {
   try {
@@ -572,6 +580,32 @@ async function onRepolish(sessionId) {
     window.$message?.error('重新优化失败:' + (e.message || e))
   } finally {
     repolishing.value = false
+  }
+}
+
+async function onReRecord(oldDetail) {
+  if (!oldDetail?.session_id) return
+  const sessionId = oldDetail.session_id
+  reRecording.value = true
+  try {
+    // 后端会复用 session_id 重置状态为 idle，保留 final_script_id 让脚本走 UPDATE
+    const res = await api.uiReRecord(sessionId)
+    const data = res?.data ?? res
+    window.$message?.success('已触发重新录制，本地录制助手将启动浏览器')
+
+    // 关掉详情抽屉，打开实时进度抽屉
+    detailVisible.value = false
+    openLive({
+      session_id: sessionId,
+      name: data?.name || oldDetail.name,
+      target_url: data?.target_url || oldDetail.target_url,
+      status: 'launching',
+    })
+  } catch (e) {
+    const detail = e?.response?.data?.detail || e?.message || e
+    window.$message?.error('重新录制失败：' + detail)
+  } finally {
+    reRecording.value = false
   }
 }
 

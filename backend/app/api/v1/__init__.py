@@ -20,6 +20,7 @@ from .endpoints.execution_reports import router as execution_reports_router
 from .endpoints.docs import router as docs_router
 from .endpoints.scheduled_tasks import router as scheduled_tasks_router
 from .endpoints.healer import router as healer_router
+from .endpoints.environments import router as environments_router
 
 
 v1_router = APIRouter()
@@ -40,6 +41,7 @@ v1_router.include_router(execution_reports_router, prefix="/execution-reports", 
 v1_router.include_router(docs_router, prefix="/docs", tags=["文档管理"])
 v1_router.include_router(scheduled_tasks_router, prefix="/api-automation", tags=["定时任务"])
 v1_router.include_router(healer_router, prefix="/heal", tags=["AI 诊断"])
+v1_router.include_router(environments_router, prefix="/environments", tags=["环境管理"], dependencies=[DependPermission])
 
 # UI 自动化模块（一期）—— 受 UI_AUTOMATION_ENABLED 开关控制，关闭时整段路由不注册
 # 零回归：开关关闭时模块完全不挂载，不会产生任何回归影响
@@ -56,6 +58,7 @@ if settings.UI_AUTOMATION_ENABLED:
         image_library_router as ui_automation_image_library_router,
         recordings_router as ui_automation_recordings_router,
         recordings_stream_router as ui_automation_recordings_stream_router,
+        categories_router as ui_automation_categories_router,
     )
     # 远程录制 WebSocket（独立于录制开关，守护进程长连接）
     from app.services.ui_automation.remote_recording import router as remote_recording_router
@@ -133,5 +136,12 @@ if settings.UI_AUTOMATION_ENABLED:
         ui_automation_batches_router,
         prefix="/ui-automation/batches",
         tags=["UI自动化-批量执行"],
+        dependencies=[DependPermission],
+    )
+    # 用例分类路由
+    v1_router.include_router(
+        ui_automation_categories_router,
+        prefix="/ui-automation/categories",
+        tags=["UI自动化-用例分类"],
         dependencies=[DependPermission],
     )

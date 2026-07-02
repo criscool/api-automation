@@ -30,6 +30,7 @@ from app.models.ui_automation import (
     UiExecutionArtifact,
     UiScriptExecution,
     UiTestReport,
+    UiTestScript,
 )
 from app.settings.config import settings
 
@@ -166,6 +167,21 @@ class UiDataPersistenceAgent(BaseApiAutomationAgent):
                 f"[exec {message.execution_id}] ui_script_executions 兜底 create"
                 f"(API 层未预建 pending 行?)"
             )
+
+        # 同步更新脚本的"最近执行"字段（脚本管理列表展示用）
+        # 只在终态才更新，避免中间态覆盖
+        if message.status in ("success", "failed", "timeout", "error", "interrupted", "cancelled"):
+            try:
+                await UiTestScript.filter(script_id=message.script_id).update(
+                    last_execution_status=message.status,
+                    last_execution_time=defaults.get("end_time"),
+                    last_execution_id=message.execution_id,
+                )
+            except Exception as e:
+                # 更新失败不影响主流程（脚本可能已删）
+                logger.warning(
+                    f"[exec {message.execution_id}] 更新脚本 last_execution 失败: {e}"
+                )
 
     async def _save_report_if_any(self, message: UiExecutionDoneMessage) -> None:
         """如果 HTML 报告主页存在,落 ui_test_reports 一条。"""

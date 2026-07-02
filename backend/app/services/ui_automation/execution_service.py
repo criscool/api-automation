@@ -240,30 +240,69 @@ def _load_api_yaml_config() -> dict:
         return _API_YAML_CONFIG_CACHE
 
 
-def _resolve_ui_base_url() -> str:
-    """UI baseURL 解析: settings.UI_BASE_URL > YAML api.base_url > 空串"""
+async def _resolve_ui_base_url() -> str:
+    """UI baseURL 解析优先级:
+        DB 激活环境.ui_base_url > settings.UI_BASE_URL > YAML api.base_url > 空串
+
+    async 化：需要读 DB 激活环境。调用方 _build_env 已在 async 上下文里。
+    """
+    # 第一优先级：DB 激活环境
+    try:
+        from app.services.environment_service import get_active_environment
+        active_env = await get_active_environment()
+        if active_env and active_env.ui_base_url:
+            return active_env.ui_base_url
+    except Exception:
+        pass  # DB 读失败则继续 fallback
+
     if settings.UI_BASE_URL:
         return settings.UI_BASE_URL
     cfg = _load_api_yaml_config()
     return (cfg.get("api", {}) or {}).get("base_url", "") or ""
 
 
-def _resolve_ui_login_credentials() -> Dict[str, str]:
-    """UI 登录凭据解析: settings.UI_LOGIN_* > YAML auth.* > 空串
+async def _resolve_ui_login_credentials() -> Dict[str, str]:
+    """UI 登录凭据解析优先级:
+        DB 激活环境 > settings.UI_LOGIN_* > YAML auth.* > 空串
 
     auth.setup.ts 实际上会用 UI_LOGIN_URL 作为登录页地址,通常跟 baseURL 同源即可。
     """
+    # 第一优先级：DB 激活环境
+    active_env = None
+    try:
+        from app.services.environment_service import get_active_environment
+        active_env = await get_active_environment()
+    except Exception:
+        pass
+
     yaml_cfg = _load_api_yaml_config()
     auth = yaml_cfg.get("auth", {}) or {}
     api_section = yaml_cfg.get("api", {}) or {}
+
+    def _pick(db_val: str, env_val: str, yaml_val: str) -> str:
+        # 三层优先级：DB > .env > YAML
+        return db_val or env_val or yaml_val or ""
+
     return {
-        "UI_LOGIN_URL": settings.UI_LOGIN_URL or api_section.get("base_url", "") or "",
-        "UI_LOGIN_USER": settings.UI_LOGIN_USERNAME or auth.get("username", "") or "",
-        "UI_LOGIN_PASS": settings.UI_LOGIN_PASSWORD or auth.get("password", "") or "",
+        "UI_LOGIN_URL": _pick(
+            active_env.ui_login_url if active_env else "",
+            settings.UI_LOGIN_URL,
+            api_section.get("base_url", ""),
+        ),
+        "UI_LOGIN_USER": _pick(
+            active_env.username if active_env else "",
+            settings.UI_LOGIN_USERNAME,
+            auth.get("username", ""),
+        ),
+        "UI_LOGIN_PASS": _pick(
+            active_env.password if active_env else "",
+            settings.UI_LOGIN_PASSWORD,
+            auth.get("password", ""),
+        ),
     }
 
 
-def _build_env(workspace_paths: Dict[str, str], extra_env: Optional[Dict[str, str]]) -> Dict[str, str]:
+async def _build_env(workspace_paths: Dict[str, str], extra_env: Optional[Dict[str, str]]) -> Dict[str, str]:
     env = os.environ.copy()
     env["PW_OUTPUT_DIR"] = workspace_paths["test_results_dir"]
     env["PW_HTML_REPORT_DIR"] = workspace_paths["html_report_dir"]
@@ -273,13 +312,13 @@ def _build_env(workspace_paths: Dict[str, str], extra_env: Optional[Dict[str, st
     env["UI_HEADLESS"] = "true" if settings.UI_HEADLESS else "false"
 
     # baseURL 兜底:.env 没填就回退到 API 业务 YAML 的 api.base_url
-    base_url = _resolve_ui_base_url()
+    base_url = await _resolve_ui_base_url()
     if base_url:
         env["UI_BASE_URL"] = base_url
 
     # 登录凭据兜底:.env 没填就回退到 API 业务 YAML 的 auth.username/password
     # auth.setup.ts 直接读这三个,不在则用 setup 内的硬编码默认值
-    for k, v in _resolve_ui_login_credentials().items():
+    for k, v in (await _resolve_ui_login_credentials()).items():
         if v:
             env[k] = v
 
@@ -475,7 +514,7 @@ async def run_playwright_script(
 
         command_str = _build_command_str(script_relative_path)
         try:
-            env = _build_env(paths, extra_env)
+            env = await _build_env(paths, extra_env)
         except RuntimeError as e:
             return ExecutionResult(
                 execution_id=execution_id,

@@ -289,6 +289,40 @@ const columns = [
     ),
   },
   { title: '描述', key: 'description', ellipsis: { tooltip: true } },
+  {
+    title: '最近执行',
+    key: 'last_execution_status',
+    width: 110,
+    render: (row) => {
+      const s = row.last_execution_status
+      if (!s) return h('span', { style: 'color: #999;' }, '未执行')
+      const map = {
+        success: 'success',
+        failed: 'error',
+        error: 'error',
+        timeout: 'error',
+        cancelled: 'warning',
+        interrupted: 'warning',
+      }
+      const labelMap = {
+        success: '成功',
+        failed: '失败',
+        error: '错误',
+        timeout: '超时',
+        cancelled: '已取消',
+        interrupted: '已中断',
+      }
+      return h(NTag, { type: map[s] || 'default', size: 'small' }, { default: () => labelMap[s] || s })
+    },
+  },
+  {
+    title: '最后执行时间',
+    key: 'last_execution_time',
+    width: 170,
+    render: (row) => row.last_execution_time
+      ? String(row.last_execution_time).replace('T', ' ').slice(0, 19)
+      : '-',
+  },
   { title: '更新时间', key: 'updated_at', width: 170 },
   {
     title: '操作',

@@ -50,14 +50,26 @@ async def lifespan(app: FastAPI):
     from app.models.api_automation import _ensure_migration_test_script_heal_fields
     await _ensure_migration_test_script_heal_fields()
 
+    # 执行环境管理（API + UI 共用的运行时环境配置）
+    from app.models.api_automation import _ensure_migration_execution_environments
+    await _ensure_migration_execution_environments()
+
     # UI 自动化 Allure 报告相关字段（按需生成方案）
     from app.models.ui_automation import _ensure_migration_ui_allure_fields
     await _ensure_migration_ui_allure_fields()
+
+    # UI 自动化脚本"最近执行"字段（脚本管理列表快速展示用）
+    from app.models.ui_automation import _ensure_migration_ui_script_last_execution
+    await _ensure_migration_ui_script_last_execution()
 
     # UI 自动化模块（一期）—— 仅在 UI_AUTOMATION_ENABLED=True 时建表 + 注册菜单
     if settings.UI_AUTOMATION_ENABLED:
         from app.models.ui_automation import _ensure_migration_ui_automation_tables
         await _ensure_migration_ui_automation_tables()
+
+        # 用例分类表 + ui_test_scripts.category_id 列（幂等）
+        from app.models.ui_automation import _ensure_migration_ui_testcase_categories
+        await _ensure_migration_ui_testcase_categories()
 
         # 幂等迁移：把旧的"一级菜单"占位改造成"UI自动化"，或全新创建
         from app.core.init_app import _ensure_menu_ui_automation

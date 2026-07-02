@@ -241,6 +241,20 @@ async def create_manual_script(req: ManualScriptRequest):
     }
 
 
+async def _get_ui_category_subtree_ids(category_id: str) -> List[int]:
+    """递归获取指定分类及其所有子分类的数据库 id"""
+    from app.models.ui_automation import UiTestCaseCategory
+    cat = await UiTestCaseCategory.filter(category_id=category_id, is_active=True).first()
+    if not cat:
+        return []
+    ids = [cat.id]
+    children = await UiTestCaseCategory.filter(parent=cat, is_active=True).all()
+    for child in children:
+        child_ids = await _get_ui_category_subtree_ids(child.category_id)
+        ids.extend(child_ids)
+    return ids
+
+
 @router.get("", summary="分页查询脚本列表")
 async def list_scripts(
     page: int = Query(1, ge=1),
@@ -248,16 +262,17 @@ async def list_scripts(
     keyword: Optional[str] = Query(None, description="按名称/描述模糊匹配"),
     script_type: Optional[str] = Query(None, description="过滤脚本类型"),
     source_type: Optional[str] = Query(None, description="ai / manual"),
+    category_id: Optional[str] = Query(None, description="分类ID筛选（含子分类）"),
+    uncategorized: bool = Query(False, description="只返回未分类脚本"),
     include_archived: bool = Query(False, description="是否含归档(软删)脚本"),
 ):
     try:
-        from app.models.ui_automation import UiTestScript
+        from app.models.ui_automation import UiTestScript, UiTestCaseCategory
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
 
     qs = UiTestScript.all().order_by("-id")
     if not include_archived:
-        # 默认不含 archived,前端列表干净;后台审计需要看历史时传 include_archived=true
         qs = qs.exclude(status="archived")
     if keyword:
         qs = qs.filter(Q(name__icontains=keyword) | Q(description__icontains=keyword))
@@ -265,11 +280,28 @@ async def list_scripts(
         qs = qs.filter(script_type=script_type)
     if source_type:
         qs = qs.filter(source_type=source_type)
+    if uncategorized:
+        qs = qs.filter(category_id__isnull=True)
+    elif category_id:
+        cat_ids = await _get_ui_category_subtree_ids(category_id)
+        if cat_ids:
+            qs = qs.filter(category_id__in=cat_ids)
 
     total = await qs.count()
-    rows = await qs.offset((page - 1) * page_size).limit(page_size)
+    rows = await qs.prefetch_related("category").offset((page - 1) * page_size).limit(page_size)
     items: List[Dict[str, Any]] = []
     for row in rows:
+        cat_name = None
+        cat_id = None
+        if row.category_id:
+            try:
+                cat = await row.category
+                if cat:
+                    cat_name = cat.name
+                    cat_id = cat.category_id
+            except Exception:
+                pass
+
         items.append(
             {
                 "script_id": row.script_id,
@@ -282,9 +314,15 @@ async def list_scripts(
                 "status": row.status,
                 "base_url": row.base_url,
                 "tags": row.tags,
+                "category_id": cat_id,
+                "category_name": cat_name,
                 "created_by": row.created_by,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+                # 最近一次执行结果（供脚本管理列表展示）
+                "last_execution_status": row.last_execution_status or "",
+                "last_execution_time": row.last_execution_time.isoformat() if row.last_execution_time else None,
+                "last_execution_id": row.last_execution_id or "",
             }
         )
 
@@ -372,6 +410,58 @@ async def update_script(script_id: str, req: UpdateScriptRequest):
         await row.save()
 
     return {"code": 200, "msg": "已更新", "data": {"script_id": script_id}, "success": True}
+
+
+class BatchMoveUiScriptRequest(BaseModel):
+    script_ids: List[str] = Field(..., description="脚本 script_id 列表")
+    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出分类")
+
+
+class MoveUiScriptRequest(BaseModel):
+    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出")
+
+
+@router.put("/batch-move", summary="批量移动脚本到分类")
+async def batch_move_ui_scripts(req: BatchMoveUiScriptRequest):
+    try:
+        from app.models.ui_automation import UiTestScript, UiTestCaseCategory
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
+
+    cat = None
+    if req.category_id:
+        cat = await UiTestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
+        if not cat:
+            raise HTTPException(status_code=404, detail=f"分类不存在: {req.category_id}")
+
+    updated = await UiTestScript.filter(
+        script_id__in=req.script_ids
+    ).update(category_id=cat.id if cat else None)
+
+    return {"code": 200, "msg": f"已移动 {updated} 个脚本", "data": {"updated_count": updated}, "success": True}
+
+
+@router.put("/{script_id}/move", summary="移动脚本到分类")
+async def move_ui_script(script_id: str, req: MoveUiScriptRequest):
+    try:
+        from app.models.ui_automation import UiTestScript, UiTestCaseCategory
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
+
+    row = await UiTestScript.filter(script_id=script_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"脚本不存在: {script_id}")
+
+    if req.category_id:
+        cat = await UiTestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
+        if not cat:
+            raise HTTPException(status_code=404, detail=f"分类不存在: {req.category_id}")
+        row.category = cat
+    else:
+        row.category = None
+
+    await row.save(update_fields=["category_id"])
+    return {"code": 200, "msg": "已移动", "data": {"script_id": script_id}, "success": True}
 
 
 @router.delete("/{script_id}", summary="删除脚本")

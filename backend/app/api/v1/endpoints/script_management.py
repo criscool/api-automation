@@ -592,6 +592,7 @@ async def _execute_script_in_background(
     执行过程的所有错误都会被捕获并落库为 FAILED 状态，避免 task 静默死亡。
     """
     import asyncio
+    import os
     import subprocess
     import shutil
     import sys
@@ -606,6 +607,24 @@ async def _execute_script_in_background(
     report_files = []
     passed = failed = errors = skipped = total = 0
     success_rate = 0.0
+
+    # 读激活环境（无则回退 env_name + YAML）
+    subprocess_env = os.environ.copy()
+    try:
+        from app.services.environment_service import get_active_environment
+        active_env = await get_active_environment()
+    except Exception:
+        active_env = None
+
+    if active_env:
+        env_name = active_env.name or env_name
+        if active_env.api_base_url:
+            subprocess_env["AUTOMATION_API__BASE_URL"] = active_env.api_base_url
+        if active_env.username:
+            subprocess_env["AUTOMATION_AUTH__USERNAME"] = active_env.username
+        if active_env.password:
+            subprocess_env["AUTOMATION_AUTH__PASSWORD"] = active_env.password
+        subprocess_env["AUTOMATION_ENV"] = env_name
 
     try:
         # 构建 pytest 命令
@@ -643,6 +662,7 @@ async def _execute_script_in_background(
                     timeout=timeout,
                     encoding="utf-8",
                     errors="replace",
+                    env=subprocess_env,
                 )
             except subprocess.TimeoutExpired as e:
                 return e
@@ -795,6 +815,7 @@ async def _run_pytest_for_one_script(
               passed/failed/errors/skipped/total/success_rate/report_files
     """
     import asyncio
+    import os
     import subprocess
     import shutil
     import sys
@@ -802,6 +823,29 @@ async def _run_pytest_for_one_script(
 
     script_dir.mkdir(parents=True, exist_ok=True)
     start_time = datetime.now()
+
+    # 读激活的执行环境；有则用它的 name 覆盖参数 env_name，并注入 AUTOMATION_* 环境变量
+    # 无激活环境时保持现状（用参数传入的 env_name + YAML 兜底）
+    subprocess_env = os.environ.copy()
+    try:
+        from app.services.environment_service import get_active_environment
+        active_env = await get_active_environment()
+    except Exception:
+        active_env = None
+
+    if active_env:
+        # 用激活环境的 name 决定 pytest --env（YAML 骨架），值由 AUTOMATION_* 覆盖
+        # 注意：如果激活环境 name 对应的 YAML 不存在会失败，用户新建时需自建 YAML
+        # 或者复用现有 name（test/staging/prod）作为骨架
+        env_name = active_env.name or env_name
+        if active_env.api_base_url:
+            subprocess_env["AUTOMATION_API__BASE_URL"] = active_env.api_base_url
+        if active_env.username:
+            subprocess_env["AUTOMATION_AUTH__USERNAME"] = active_env.username
+        if active_env.password:
+            subprocess_env["AUTOMATION_AUTH__PASSWORD"] = active_env.password
+        # AUTOMATION_ENV 兼容旧代码
+        subprocess_env["AUTOMATION_ENV"] = env_name
 
     # 构造 pytest target：有 nodeids 时跑 file::Class::method，否则跑整个文件
     if nodeids:
@@ -846,6 +890,7 @@ async def _run_pytest_for_one_script(
                 timeout=timeout,
                 encoding="utf-8",
                 errors="replace",
+                env=subprocess_env,
             )
         except subprocess.TimeoutExpired as e:
             return e

@@ -85,9 +85,42 @@ class UiTestScript(BaseModel, TimestampMixin):
     base_url = fields.CharField(max_length=500, default="", description="脚本默认 base_url")
 
     created_by = fields.CharField(max_length=100, default="", description="创建人")
+    category = fields.ForeignKeyField(
+        "models.UiTestCaseCategory", null=True, related_name="scripts",
+        description="所属分类",
+    )
+
+    # 最近一次执行结果（用于脚本管理列表快速展示）—— 每次执行完由 data_persistence_agent 更新
+    last_execution_status = fields.CharField(
+        max_length=20, default="",
+        description="最近一次执行状态: success/failed/timeout/error/interrupted/cancelled"
+    )
+    last_execution_time = fields.DatetimeField(null=True, description="最近一次执行时间")
+    last_execution_id = fields.CharField(
+        max_length=100, default="",
+        description="最近一次执行的 execution_id（跳转详情用）"
+    )
 
     class Meta:
         table = "ui_test_scripts"
+
+
+class UiTestCaseCategory(BaseModel, TimestampMixin):
+    """UI 自动化用例分类树 —— 自引用树形结构，按系统分组展示脚本"""
+    category_id = fields.CharField(max_length=100, unique=True, description="分类ID", index=True)
+    name = fields.CharField(max_length=200, description="分类名称")
+    parent = fields.ForeignKeyField(
+        "models.UiTestCaseCategory", null=True, related_name="children",
+        description="父节点",
+    )
+    sort_order = fields.IntField(default=0, description="同级排序")
+    level = fields.IntField(default=0, description="层级深度")
+    description = fields.TextField(default="", description="描述")
+    is_active = fields.BooleanField(default=True, description="是否激活")
+    match_rule = fields.CharField(max_length=500, null=True, default=None, description="匹配规则(glob)")
+
+    class Meta:
+        table = "ui_testcase_categories"
 
 
 class UiScriptExecution(BaseModel, TimestampMixin):
@@ -277,6 +310,39 @@ class UiImageLibrary(BaseModel, TimestampMixin):
 
     class Meta:
         table = "ui_image_library"
+
+
+async def _ensure_migration_ui_testcase_categories():
+    """免删库增量迁移：创建 ui_testcase_categories 表 + ui_test_scripts.category_id 列（幂等）"""
+    from tortoise import connections
+    conn = connections.get("default")
+
+    # 1. 建表
+    try:
+        await conn.execute_script("""CREATE TABLE IF NOT EXISTS ui_testcase_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            category_id VARCHAR(100) NOT NULL UNIQUE,
+            name VARCHAR(200) NOT NULL,
+            parent_id INTEGER REFERENCES ui_testcase_categories(id),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            level INTEGER NOT NULL DEFAULT 0,
+            description TEXT NOT NULL DEFAULT '',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            match_rule VARCHAR(500),
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
+    except Exception as e:
+        raise
+
+    # 2. 加列（幂等）
+    try:
+        await conn.execute_script(
+            "ALTER TABLE ui_test_scripts ADD COLUMN category_id INTEGER REFERENCES ui_testcase_categories(id)"
+        )
+    except Exception as e:
+        if "duplicate column" not in str(e).lower() and "duplicate column name" not in str(e).lower():
+            raise
 
 
 async def _ensure_migration_ui_automation_tables():
@@ -517,6 +583,30 @@ async def _ensure_migration_ui_allure_fields():
          "ALTER TABLE ui_batch_executions ADD COLUMN batch_allure_generated_at TIMESTAMP"),
         ("ui_batch_executions", "batch_allure_error",
          "ALTER TABLE ui_batch_executions ADD COLUMN batch_allure_error TEXT NOT NULL DEFAULT ''"),
+    ]
+
+    for table, column, ddl in migrations:
+        try:
+            await conn.execute_query(f"SELECT {column} FROM {table} LIMIT 1")
+        except Exception:
+            await conn.execute_script(ddl)
+
+
+async def _ensure_migration_ui_script_last_execution():
+    """免删库增量迁移：UiTestScript 加 last_execution_* 3 字段。
+
+    用于脚本管理列表快速展示最近一次执行结果（避免每行都反查 UiScriptExecution）。
+    """
+    from tortoise import connections
+    conn = connections.get("default")
+
+    migrations = [
+        ("ui_test_scripts", "last_execution_status",
+         "ALTER TABLE ui_test_scripts ADD COLUMN last_execution_status VARCHAR(20) NOT NULL DEFAULT ''"),
+        ("ui_test_scripts", "last_execution_time",
+         "ALTER TABLE ui_test_scripts ADD COLUMN last_execution_time TIMESTAMP"),
+        ("ui_test_scripts", "last_execution_id",
+         "ALTER TABLE ui_test_scripts ADD COLUMN last_execution_id VARCHAR(100) NOT NULL DEFAULT ''"),
     ]
 
     for table, column, ddl in migrations:

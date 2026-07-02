@@ -64,6 +64,16 @@ export default {
       },
     },
     {
+      name: 'UI用例管理',
+      path: 'testcase-management',
+      component: () => import('./testcase-management/index.vue'),
+      meta: {
+        title: '用例管理',
+        icon: 'mdi:file-tree',
+        description: '按分类管理 UI 自动化脚本',
+      },
+    },
+    {
       name: 'UI执行报告',
       path: 'execution-reports',
       component: () => import('./execution-reports/index.vue'),

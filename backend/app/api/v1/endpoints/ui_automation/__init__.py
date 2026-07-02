@@ -31,6 +31,7 @@ from .executions import (
 )
 from .image_library import router as image_library_router
 from .recordings import recordings_router, recordings_stream_router
+from .categories import router as categories_router
 
 __all__ = [
     "health_router",
@@ -44,4 +45,5 @@ __all__ = [
     "recordings_router",
     "recordings_stream_router",
     "batches_router",
+    "categories_router",
 ]
