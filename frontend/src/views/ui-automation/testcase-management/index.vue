@@ -257,22 +257,11 @@
         <n-button @click="detailModal.show = false">关闭</n-button>
       </template>
     </n-modal>
-
-    <!-- 右键菜单 -->
-    <n-dropdown
-      :show="contextMenu.show"
-      :x="contextMenu.x"
-      :y="contextMenu.y"
-      :options="contextMenuOptions"
-      placement="bottom-start"
-      @clickoutside="contextMenu.show = false"
-      @select="onContextMenuSelect"
-    />
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, h, computed, onMounted } from 'vue'
+import { ref, reactive, h, onMounted } from 'vue'
 import { useMessage, NTag, NButton, NIcon, NText, NInput, NSpace } from 'naive-ui'
 import { Icon } from '@iconify/vue'
 import api from '@/api'
@@ -325,10 +314,6 @@ const detailModal = reactive({
   data: null,
 })
 
-// 右键菜单
-const contextMenu = reactive({ show: false, x: 0, y: 0 })
-const contextMenuNode = ref(null)
-
 // ==================== 选项 ====================
 const scriptTypeOptions = [
   { label: 'Playwright', value: 'playwright' },
@@ -341,17 +326,6 @@ const sourceTypeOptions = [
   { label: '手动', value: 'manual' },
   { label: '录制', value: 'recorded' },
 ]
-
-const contextMenuOptions = computed(() => {
-  const opts = [
-    { label: '新建子分类', key: 'add_child' },
-    { label: '编辑', key: 'edit' },
-  ]
-  if (!contextMenuNode.value?.children || contextMenuNode.value.children.length === 0) {
-    opts.push({ label: '删除', key: 'delete' })
-  }
-  return opts
-})
 
 // ==================== 表格列定义 ====================
 const scriptColumns = [
@@ -413,10 +387,51 @@ const scriptColumns = [
 
 // ==================== 分类树渲染 ====================
 function renderTreeLabel({ option }) {
-  return h('div', { class: 'flex items-center gap-1' }, [
-    option.name,
-    h(NTag, { size: 'tiny', bordered: false, style: 'margin-left: 4px' }, { default: () => String(option.script_count || 0) }),
+  if (treeEditMode.value) {
+    return h('div', { class: 'tree-label-editing flex items-center' }, [
+      h('span', option.name),
+      h(NTag, { size: 'tiny', class: 'ml-1' }, { default: () => String(option.script_count) }),
+      h(NSpace, { size: 2, class: 'ml-2' }, [
+        h(NButton, {
+          size: 'tiny', text: true,
+          onClick: (e) => { e.stopPropagation(); openEditCategory(option) },
+        }, { icon: () => h(Icon, { icon: 'mdi:pencil' }) }),
+        h(NButton, {
+          size: 'tiny', text: true,
+          onClick: (e) => { e.stopPropagation(); openAddChildCategory(option) },
+        }, { icon: () => h(Icon, { icon: 'mdi:plus-circle-outline' }) }),
+        h(NButton, {
+          size: 'tiny', text: true, type: 'error',
+          onClick: (e) => { e.stopPropagation(); confirmDeleteCategory(option) },
+        }, { icon: () => h(Icon, { icon: 'mdi:delete-outline' }) }),
+      ]),
+    ])
+  }
+  return h('div', { class: 'tree-label flex items-center' }, [
+    h('span', option.name),
+    h(NTag, { size: 'tiny', class: 'ml-2' }, { default: () => String(option.script_count || 0) }),
   ])
+}
+
+function openEditCategory(node) {
+  editModal.show = true
+  editModal.categoryId = node.category_id
+  editModal.form = {
+    name: node.name,
+    match_rule: node.match_rule || '',
+    description: node.description || '',
+  }
+}
+
+function openAddChildCategory(node) {
+  createModal.show = true
+  createModal.form = { name: '', description: '' }
+  createModal.parentId = node.category_id
+}
+
+function confirmDeleteCategory(node) {
+  if (!confirm(`确定删除分类"${node.name}"？子节点将上移，脚本变未分类。`)) return
+  deleteCategory(node.category_id)
 }
 
 function renderTreePrefix({ option }) {
@@ -433,14 +448,6 @@ function treeNodeProps({ option }) {
       currentCategoryName.value = option.name
       pagination.page = 1
       loadScripts()
-    },
-    onContextmenu(e) {
-      if (!treeEditMode.value) return
-      e.preventDefault()
-      contextMenuNode.value = option
-      contextMenu.show = true
-      contextMenu.x = e.clientX
-      contextMenu.y = e.clientY
     },
   }
 }
@@ -576,27 +583,6 @@ function addRootCategory() {
   createModal.show = true
   createModal.form = { name: '', description: '' }
   createModal.parentId = null
-}
-
-function onContextMenuSelect(key) {
-  contextMenu.show = false
-  const node = contextMenuNode.value
-  if (!node) return
-  if (key === 'edit') {
-    editModal.show = true
-    editModal.categoryId = node.category_id
-    editModal.form = {
-      name: node.name || '',
-      match_rule: node.match_rule || '',
-      description: node.description || '',
-    }
-  } else if (key === 'add_child') {
-    createModal.show = true
-    createModal.form = { name: '', description: '' }
-    createModal.parentId = node.category_id
-  } else if (key === 'delete') {
-    deleteCategory(node.category_id)
-  }
 }
 
 async function doCreateCategory() {

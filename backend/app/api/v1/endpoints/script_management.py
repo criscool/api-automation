@@ -846,6 +846,12 @@ async def _run_pytest_for_one_script(
             subprocess_env["AUTOMATION_AUTH__PASSWORD"] = active_env.password
         # AUTOMATION_ENV 兼容旧代码
         subprocess_env["AUTOMATION_ENV"] = env_name
+        logger.info(
+            f"[pytest env] 应用激活环境: name={active_env.name} "
+            f"api_base_url={active_env.api_base_url} username={active_env.username}"
+        )
+    else:
+        logger.info(f"[pytest env] 未激活环境，使用参数 env_name={env_name}（YAML 兜底）")
 
     # 构造 pytest target：有 nodeids 时跑 file::Class::method，否则跑整个文件
     if nodeids:
