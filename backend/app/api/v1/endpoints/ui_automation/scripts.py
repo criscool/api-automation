@@ -334,6 +334,58 @@ async def list_scripts(
     }
 
 
+class BatchMoveUiScriptRequest(BaseModel):
+    script_ids: List[str] = Field(..., description="脚本 script_id 列表")
+    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出分类")
+
+
+class MoveUiScriptRequest(BaseModel):
+    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出")
+
+
+@router.put("/batch-move", summary="批量移动脚本到分类")
+async def batch_move_ui_scripts(req: BatchMoveUiScriptRequest):
+    try:
+        from app.models.ui_automation import UiTestScript, UiTestCaseCategory
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
+
+    cat = None
+    if req.category_id:
+        cat = await UiTestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
+        if not cat:
+            raise HTTPException(status_code=404, detail=f"分类不存在: {req.category_id}")
+
+    updated = await UiTestScript.filter(
+        script_id__in=req.script_ids
+    ).update(category_id=cat.id if cat else None)
+
+    return {"code": 200, "msg": f"已移动 {updated} 个脚本", "data": {"updated_count": updated}, "success": True}
+
+
+@router.put("/{script_id}/move", summary="移动脚本到分类")
+async def move_ui_script(script_id: str, req: MoveUiScriptRequest):
+    try:
+        from app.models.ui_automation import UiTestScript, UiTestCaseCategory
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
+
+    row = await UiTestScript.filter(script_id=script_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"脚本不存在: {script_id}")
+
+    if req.category_id:
+        cat = await UiTestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
+        if not cat:
+            raise HTTPException(status_code=404, detail=f"分类不存在: {req.category_id}")
+        row.category = cat
+    else:
+        row.category = None
+
+    await row.save(update_fields=["category_id"])
+    return {"code": 200, "msg": "已移动", "data": {"script_id": script_id}, "success": True}
+
+
 @router.get("/{script_id}", summary="脚本详情")
 async def get_script(script_id: str):
     try:
@@ -410,58 +462,6 @@ async def update_script(script_id: str, req: UpdateScriptRequest):
         await row.save()
 
     return {"code": 200, "msg": "已更新", "data": {"script_id": script_id}, "success": True}
-
-
-class BatchMoveUiScriptRequest(BaseModel):
-    script_ids: List[str] = Field(..., description="脚本 script_id 列表")
-    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出分类")
-
-
-class MoveUiScriptRequest(BaseModel):
-    category_id: Optional[str] = Field(None, description="目标分类 category_id，空则移出")
-
-
-@router.put("/batch-move", summary="批量移动脚本到分类")
-async def batch_move_ui_scripts(req: BatchMoveUiScriptRequest):
-    try:
-        from app.models.ui_automation import UiTestScript, UiTestCaseCategory
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
-
-    cat = None
-    if req.category_id:
-        cat = await UiTestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
-        if not cat:
-            raise HTTPException(status_code=404, detail=f"分类不存在: {req.category_id}")
-
-    updated = await UiTestScript.filter(
-        script_id__in=req.script_ids
-    ).update(category_id=cat.id if cat else None)
-
-    return {"code": 200, "msg": f"已移动 {updated} 个脚本", "data": {"updated_count": updated}, "success": True}
-
-
-@router.put("/{script_id}/move", summary="移动脚本到分类")
-async def move_ui_script(script_id: str, req: MoveUiScriptRequest):
-    try:
-        from app.models.ui_automation import UiTestScript, UiTestCaseCategory
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"UI 自动化模型加载失败: {e}")
-
-    row = await UiTestScript.filter(script_id=script_id).first()
-    if not row:
-        raise HTTPException(status_code=404, detail=f"脚本不存在: {script_id}")
-
-    if req.category_id:
-        cat = await UiTestCaseCategory.filter(category_id=req.category_id, is_active=True).first()
-        if not cat:
-            raise HTTPException(status_code=404, detail=f"分类不存在: {req.category_id}")
-        row.category = cat
-    else:
-        row.category = None
-
-    await row.save(update_fields=["category_id"])
-    return {"code": 200, "msg": "已移动", "data": {"script_id": script_id}, "success": True}
 
 
 @router.delete("/{script_id}", summary="删除脚本")
