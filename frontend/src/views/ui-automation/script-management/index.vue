@@ -261,9 +261,12 @@ const loading = ref(false)
 const filter = ref({ keyword: '', script_type: null, source_type: null })
 const pagination = ref({
   page: 1,
-  pageSize: 10,
+  pageSize: 20,
   itemCount: 0,
-  showSizePicker: false,
+  showSizePicker: true,
+  showQuickJumper: true,
+  pageSizes: [10, 20, 30, 50],
+  prefix: (info) => `共 ${info.itemCount} 条`,
 })
 
 const columns = [

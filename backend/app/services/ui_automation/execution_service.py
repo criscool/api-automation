@@ -251,7 +251,8 @@ async def _resolve_ui_base_url() -> str:
         from app.services.environment_service import get_active_environment
         active_env = await get_active_environment()
         if active_env and active_env.ui_base_url:
-            return active_env.ui_base_url
+            # 兜底 rstrip 末尾 /，避免拼路径出现 //（老数据兼容）
+            return active_env.ui_base_url.rstrip("/")
     except Exception:
         pass  # DB 读失败则继续 fallback
 

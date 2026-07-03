@@ -619,7 +619,7 @@ async def _execute_script_in_background(
     if active_env:
         env_name = active_env.name or env_name
         if active_env.api_base_url:
-            subprocess_env["AUTOMATION_API__BASE_URL"] = active_env.api_base_url
+            subprocess_env["AUTOMATION_API__BASE_URL"] = active_env.api_base_url.rstrip("/")
         if active_env.username:
             subprocess_env["AUTOMATION_AUTH__USERNAME"] = active_env.username
         if active_env.password:
@@ -839,7 +839,8 @@ async def _run_pytest_for_one_script(
         # 或者复用现有 name（test/staging/prod）作为骨架
         env_name = active_env.name or env_name
         if active_env.api_base_url:
-            subprocess_env["AUTOMATION_API__BASE_URL"] = active_env.api_base_url
+            # 兜底 rstrip，兼容老数据末尾带 / 的情况（避免拼路径出现 //）
+            subprocess_env["AUTOMATION_API__BASE_URL"] = active_env.api_base_url.rstrip("/")
         if active_env.username:
             subprocess_env["AUTOMATION_AUTH__USERNAME"] = active_env.username
         if active_env.password:

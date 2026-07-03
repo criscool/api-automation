@@ -47,6 +47,16 @@ class EnvironmentUpdateRequest(BaseModel):
     notes: Optional[str] = None
 
 
+def _normalize_url(url: str) -> str:
+    """归一化 URL：去末尾 /，避免拼路径时出现双斜杠导致 404。
+
+    login_url 也去末尾 /，因为业务侧通常直接跳到根路径下的 /login 子路径。
+    """
+    if not url:
+        return ""
+    return url.strip().rstrip("/")
+
+
 def _serialize(row) -> Dict[str, Any]:
     """把 ORM 对象转成前端消费的 dict（密码不返回明文，用星号占位）"""
     return {
@@ -99,9 +109,9 @@ async def create_environment(req: EnvironmentCreateRequest):
         env_id=env_id,
         name=req.name.strip(),
         label=req.label.strip(),
-        api_base_url=req.api_base_url or "",
-        ui_base_url=req.ui_base_url or "",
-        ui_login_url=req.ui_login_url or "",
+        api_base_url=_normalize_url(req.api_base_url),
+        ui_base_url=_normalize_url(req.ui_base_url),
+        ui_login_url=_normalize_url(req.ui_login_url),
         username=req.username or "",
         password=req.password or "",
         notes=req.notes or "",
@@ -129,11 +139,11 @@ async def update_environment(env_id: str, req: EnvironmentUpdateRequest):
     if req.label is not None:
         row.label = req.label.strip()
     if req.api_base_url is not None:
-        row.api_base_url = req.api_base_url
+        row.api_base_url = _normalize_url(req.api_base_url)
     if req.ui_base_url is not None:
-        row.ui_base_url = req.ui_base_url
+        row.ui_base_url = _normalize_url(req.ui_base_url)
     if req.ui_login_url is not None:
-        row.ui_login_url = req.ui_login_url
+        row.ui_login_url = _normalize_url(req.ui_login_url)
     if req.username is not None:
         row.username = req.username
     # 密码只在显式传入非空时更新（避免前端不填密码保存把已有密码清空）
