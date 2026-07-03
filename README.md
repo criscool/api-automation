@@ -337,6 +337,7 @@ allure --version
 ## 7. 生产部署
 
 ### 7.1 服务器准备（Ubuntu 22.04）
+目前服务器地址：http://172.16.8.144/
 
 ```bash
 # Python + pip
